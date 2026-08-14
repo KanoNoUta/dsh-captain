@@ -1,0 +1,28 @@
+{
+  "extends": "../../../tsconfig.base.client.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types",
+    "tsBuildInfoFile": "lib/tsconfig.client.tsbuildinfo"
+  },
+  "files": [
+    "src/css-modules.d.ts",
+    "src/client/CaptainSettingsCard.tsx",
+    "src/client/captain-card-controller.ts",
+    "src/client/constants.ts",
+    "src/client/index.ts",
+    "src/client/locales.ts",
+    "src/types.ts"
+  ],
+  "references": [
+    { "path": "../../../vendor/cordis" },
+    { "path": "../../llm/llm" },
+    { "path": "../../api/remotes/tsconfig.client.json" },
+    { "path": "../../client/runtime" },
+    { "path": "../../client/locale" },
+    { "path": "../../client/ui-slots" },
+    { "path": "../../client/ui-settings" },
+    { "path": "../../client/ui-settings-plugins" },
+    { "path": "../../runtime-diagnostics/invariants" }
+  ]
+}

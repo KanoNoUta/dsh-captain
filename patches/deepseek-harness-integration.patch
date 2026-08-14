@@ -1,0 +1,144 @@
+diff --git a/packages/bundle/web-app/cordis.patch.yml b/packages/bundle/web-app/cordis.patch.yml
+index b06e63b..f35f273 100644
+--- a/packages/bundle/web-app/cordis.patch.yml
++++ b/packages/bundle/web-app/cordis.patch.yml
+@@ -99,6 +99,11 @@
+     - id: api-gateway
+       name: '@deepseek-ai/dsh-host-apiproxy'
+ 
++    # Captain owns the synthetic model route: GPT plans and reviews while
++    # DeepSeek workers execute through the configured relay routes.
++    - id: captain
++      name: '@deepseek-ai/dsh-captain'
++
+     - id: cordis-host-runner
+       name: '@deepseek-ai/dsh-cordis-host-runner'
+ 
+diff --git a/packages/bundle/web-app/package.json b/packages/bundle/web-app/package.json
+index ca4709a..17d892f 100644
+--- a/packages/bundle/web-app/package.json
++++ b/packages/bundle/web-app/package.json
+@@ -81,6 +81,7 @@
+     "@deepseek-ai/dsh-client-ui-workflow-run": "workspace:^",
+     "@deepseek-ai/dsh-client-ui-trajectory": "workspace:^",
+     "@deepseek-ai/dsh-client-ui-workspace": "workspace:^",
++    "@deepseek-ai/dsh-captain": "workspace:^",
+     "@deepseek-ai/dsh-cmdline": "workspace:^",
+     "@deepseek-ai/dsh-code-runtime-worker-thread": "workspace:^",
+     "@deepseek-ai/dsh-cordis-client-runner": "workspace:^",
+diff --git a/packages/client/ui-model-selection/src/client/ModelSelect.tsx b/packages/client/ui-model-selection/src/client/ModelSelect.tsx
+index e53001d..6123c7e 100644
+--- a/packages/client/ui-model-selection/src/client/ModelSelect.tsx
++++ b/packages/client/ui-model-selection/src/client/ModelSelect.tsx
+@@ -24,6 +24,7 @@ import {
+ import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
+ import type { ModelSelectInjected } from './slots.ts'
+ import css from './ModelSelect.module.css'
++import { displayProviderName } from './provider-label.ts'
+ 
+ /** Which pane the dropdown shows: the two-row root or one drilled-in list. */
+ type Pane = 'root' | 'model' | 'effort'
+@@ -288,7 +289,7 @@ export function ModelSelect(
+                   const headingId = `${id}-${group.id}`
+                   return (
+                     <section role="group" aria-labelledby={headingId} className={css.group} key={group.id}>
+-                      <div className={css.groupTitle} id={headingId}>{group.name}</div>
++                      <div className={css.groupTitle} id={headingId}>{displayProviderName(group.id, group.name)}</div>
+                       {group.models.map((model) => {
+                         const selected = state.current?.provider === group.id && state.current.model === model.id
+                         return (
+diff --git a/packages/client/ui-model-selection/src/client/index.ts b/packages/client/ui-model-selection/src/client/index.ts
+index fac380e..b3749a3 100644
+--- a/packages/client/ui-model-selection/src/client/index.ts
++++ b/packages/client/ui-model-selection/src/client/index.ts
+@@ -25,6 +25,7 @@ import { ModelDirectoryResolver } from './service.ts'
+ import type { ModelSelectInjected } from './slots.ts'
+ import { ModelSelect } from './ModelSelect.tsx'
+ import { en, zh, type ModelKey } from './locales.ts'
++import { displayProviderName } from './provider-label.ts'
+ 
+ export { ModelDirectory } from './directory.ts'
+ export type { ModelDirectoryState } from './directory.ts'
+@@ -52,7 +53,9 @@ function optionsOf(directory: SessionModels, t: TranslateNS<'model'>): SelectOpt
+       rows.push({
+         id: rowId(group.id, model.id),
+         label: model.name,
+-        detail: model.description !== undefined ? `${group.name} · ${model.description}` : group.name,
++        detail: model.description !== undefined
++          ? `${displayProviderName(group.id, group.name)} · ${model.description}`
++          : displayProviderName(group.id, group.name),
+         ...(directory.current.provider === group.id && directory.current.model === model.id
+           ? { active: true } : {}),
+       })
+diff --git a/packages/client/ui-model-selection/tests/model-select.client.spec.tsx b/packages/client/ui-model-selection/tests/model-select.client.spec.tsx
+index ea9c2f7..a2b3f9e 100644
+--- a/packages/client/ui-model-selection/tests/model-select.client.spec.tsx
++++ b/packages/client/ui-model-selection/tests/model-select.client.spec.tsx
+@@ -112,6 +112,31 @@ describe('ModelSelect reasoning effort', () => {
+       .toEqual(['Default', 'Standard'])
+   })
+ 
++  it('shows distinct route labels for official and OpenCode DeepSeek', () => {
++    const directory = createSnapshotStore(state({
++      groups: [
++        ...state().groups,
++        {
++          id: 'opencode-go',
++          name: 'opencode-go',
++          models: [{ id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash' }],
++        },
++      ],
++    }))
++    render(<ModelSelect
++      locked={false}
++      available
++      directory={directory}
++      load={vi.fn()}
++      select={vi.fn().mockResolvedValue(true)}
++      t={t}
++    />)
++    fireEvent.click(screen.getByRole('button', { name: /选择模型/ }))
++    fireEvent.click(screen.getByRole('menuitem', { name: /模型/ }))
++    expect(screen.getByText('Official DeepSeek')).toBeTruthy()
++    expect(screen.getByText('OpenCode DeepSeek')).toBeTruthy()
++  })
++
+   it('prompts for a selection when the current model is no longer advertised', () => {
+     const directory = createSnapshotStore(state({
+       current: { provider: 'deepseek-official', model: 'removed-model' },
+diff --git a/tsconfig.client.json b/tsconfig.client.json
+index e599f76..9ebfc73 100644
+--- a/tsconfig.client.json
++++ b/tsconfig.client.json
+@@ -60,6 +60,7 @@
+     { "path": "./packages/api/remotes/tsconfig.client.json" },
+     { "path": "./packages/client/runtime" },
+     { "path": "./packages/extensions/cordis-client-runner" },
++    { "path": "./packages/extensions/captain/tsconfig.client.json" },
+     { "path": "./packages/extensions/ui-cordis" },
+     { "path": "./packages/test-support/client-runtime" },
+     { "path": "./packages/client/ui-layout" },
+diff --git a/tsconfig.host.json b/tsconfig.host.json
+index 4590362..ae8b6b5 100644
+--- a/tsconfig.host.json
++++ b/tsconfig.host.json
+@@ -275,6 +275,7 @@
+     { "path": "./packages/preset/persona" },
+     { "path": "./packages/guard/repeat-tool-reminder" },
+     { "path": "./packages/extensions/cordis-host-runner" },
++    { "path": "./packages/extensions/captain/tsconfig.host.json" },
+     { "path": "./packages/extensions/tool-cordis" },
+     { "path": "./packages/hooks/hook-protocol" },
+     { "path": "./packages/hooks/hooks-claude-code" },
+diff --git a/packages/client/ui-model-selection/src/client/provider-label.ts b/packages/client/ui-model-selection/src/client/provider-label.ts
+new file mode 100644
+index 0000000..9571035
+--- /dev/null
++++ b/packages/client/ui-model-selection/src/client/provider-label.ts
+@@ -0,0 +1,6 @@
++/** Return a selector label that distinguishes routes serving the same model. */
++export function displayProviderName(provider: string, name: string): string {
++  if (provider === 'deepseek-official') return 'Official DeepSeek'
++  if (provider === 'opencode-go') return 'OpenCode DeepSeek'
++  return name
++}

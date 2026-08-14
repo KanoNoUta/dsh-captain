@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Captain
+        uses: actions/checkout@v4
+        with:
+          path: captain
+
+      - name: Check out DeepSeek Harness
+        uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/deepseek-harness
+          path: harness
+
+      - name: Mount plugin source and integration patch
+        shell: bash
+        run: |
+          mkdir -p harness/packages/extensions/captain
+          rsync -a \
+            --exclude .git \
+            --exclude .github \
+            --exclude lib \
+            --exclude node_modules \
+            --exclude patches \
+            captain/ harness/packages/extensions/captain/
+          cd harness
+          git apply ../captain/patches/deepseek-harness-integration.patch
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: harness/pnpm-lock.yaml
+
+      - name: Install workspace dependencies
+        working-directory: harness
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Run Captain checks
+        working-directory: harness
+        run: |
+          pnpm exec vitest run packages/extensions/captain/tests packages/client/ui-model-selection/tests/model-select.client.spec.tsx
+          pnpm exec tsc -p packages/extensions/captain/tsconfig.host.json --pretty false
+          pnpm --filter @deepseek-ai/dsh-captain run bundle

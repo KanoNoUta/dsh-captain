@@ -1,0 +1,31 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types",
+    "tsBuildInfoFile": "lib/tsconfig.host.tsbuildinfo"
+  },
+  "files": [
+    "src/adapter.ts",
+    "src/config.ts",
+    "src/diff.ts",
+    "src/index.ts",
+    "src/invariant.ts",
+    "src/orchestrator.ts",
+    "src/presets.ts",
+    "src/reviewer.ts",
+    "src/scheduler.ts",
+    "src/types.ts",
+    "src/vision.ts"
+  ],
+  "references": [
+    { "path": "../../../vendor/cordis" },
+    { "path": "../../../vendor/schemastery" },
+    { "path": "../../core/agent" },
+    { "path": "../../attachment/attachment" },
+    { "path": "../../llm/llm" },
+    { "path": "../../settings/settings" },
+    { "path": "../../workflow/workflow" },
+    { "path": "../../runtime-diagnostics/invariants" }
+  ]
+}
