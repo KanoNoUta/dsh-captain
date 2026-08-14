@@ -6,7 +6,13 @@ Captain（船长）是 DeepSeek Harness 的双面插件，暴露一条合成的 
 
 ## 安装到 DeepSeek Harness
 
-Captain 当前依托 DeepSeek Harness workspace 构建，按源码插件安装：
+Captain 已携带 bundle manifest 和预构建的 Host/Client 入口，可直接安装到 Web profile：
+
+```powershell
+dsh plugin --profile web add github:KanoNoUta/dsh-captain
+```
+
+如果要在 DeepSeek Harness checkout 内做源码开发：
 
 ```powershell
 cd F:\path\to\deepseek-harness
@@ -17,7 +23,7 @@ pnpm exec tsc -b packages/extensions/captain/tsconfig.host.json --pretty false
 pnpm --filter @deepseek-ai/dsh-captain run bundle
 ```
 
-集成补丁会把 Captain 挂载到 Web bundle，加入 Host/Client TypeScript 编译入口，并在原生模型选择器中区分官方 DeepSeek 和 OpenCode DeepSeek 路由。
+可选的源码集成补丁会加入 Host/Client TypeScript 编译入口，并在原生模型选择器中区分官方 DeepSeek 和 OpenCode DeepSeek 路由。普通 `dsh plugin add` 安装由 `cordis.patch.yml` 挂载，不需要该补丁。
 
 ## 组合方式
 

@@ -6,7 +6,13 @@ Captain is a dual-face DeepSeek Harness plugin that exposes one synthetic `capta
 
 ## Install into DeepSeek Harness
 
-Captain currently builds against the DeepSeek Harness workspace and is installed as a source plugin:
+Captain ships its bundle manifest and built Host/Client entry points, so a Web profile can install it directly from GitHub:
+
+```powershell
+dsh plugin --profile web add github:KanoNoUta/dsh-captain
+```
+
+For source development inside a DeepSeek Harness checkout:
 
 ```powershell
 cd F:\path\to\deepseek-harness
@@ -17,7 +23,7 @@ pnpm exec tsc -b packages/extensions/captain/tsconfig.host.json --pretty false
 pnpm --filter @deepseek-ai/dsh-captain run bundle
 ```
 
-The integration patch mounts Captain in the Web bundle, adds both TypeScript compiler faces, and keeps official DeepSeek and OpenCode DeepSeek routes distinguishable in the native model selector.
+The optional source integration patch adds both TypeScript compiler faces and keeps official DeepSeek and OpenCode DeepSeek routes distinguishable in the native model selector. Normal `dsh plugin add` installation uses `cordis.patch.yml` and does not require that patch.
 
 ## Composition
 
