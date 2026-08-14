@@ -13,7 +13,7 @@ cd F:\path\to\deepseek-harness
 git submodule add https://github.com/KanoNoUta/dsh-captain.git packages/extensions/captain
 git apply packages/extensions/captain/patches/deepseek-harness-integration.patch
 pnpm install
-pnpm exec tsc -b packages/extensions/captain/tsconfig.json --pretty false
+pnpm exec tsc -b packages/extensions/captain/tsconfig.host.json --pretty false
 pnpm --filter @deepseek-ai/dsh-captain run bundle
 ```
 

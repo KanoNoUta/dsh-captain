@@ -6,7 +6,7 @@ Before opening a pull request, run:
 
 ```powershell
 pnpm exec vitest run packages/extensions/captain/tests packages/client/ui-model-selection/tests/model-select.client.spec.tsx
-pnpm exec tsc -b packages/extensions/captain/tsconfig.json --pretty false
+pnpm exec tsc -b packages/extensions/captain/tsconfig.host.json --pretty false
 pnpm --filter @deepseek-ai/dsh-captain run bundle
 ```
 
