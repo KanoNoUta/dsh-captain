@@ -16,7 +16,8 @@
     "src/reviewer.ts",
     "src/scheduler.ts",
     "src/types.ts",
-    "src/vision.ts"
+    "src/vision.ts",
+    "src/vision-model.ts"
   ],
   "references": [
     { "path": "../../../vendor/cordis" },

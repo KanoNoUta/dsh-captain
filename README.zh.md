@@ -35,13 +35,13 @@ Captain 通过现有 OpenAI-compatible LLM adapter 调用配置的提供方路�
 
 Planner 返回 JSON 依赖 DAG。文件所有权不重叠的 Worker 会在 Token 预算和自适应并发上限内并行执行。Reviewer 接收验收条件、Worker 报告和当前增量 Git Diff。审核失败时只返工 finding 指定的任务；未绑定任务的 finding 会重新检查完整计划。审核通过后才推进下一轮使用的进程内 checkpoint。
 
-简短的日常问候会直接走 GPT Planner 路由，不启动 Worker 或 Reviewer，因此闲聊不会触发仓库 Diff 审核。定向返工会连同前置依赖任务一起提交给调度器，确保返工 DAG 始终有可执行的根任务。
+简短的日常问候会直接走 GPT Planner 路由，不启动 Worker 或 Reviewer，因此闲聊不会触发仓库 Diff 审核。简短的图片识别或描述请求会直接返回视觉 notes；要求写代码、修复、部署、提交或发布的图片回合仍进入规划和执行流程。定向返工会连同前置依赖任务一起提交给调度器，确保返工 DAG 始终有可执行的根任务。
 
-图片附件继续使用原生 `ImageAttachmentRef` block。视觉路由在 Captain 设置卡里单独配置为 OpenAI-compatible GPT 路由，附件传输仍由现有 attachment 与 API 包负责。
+图片附件继续使用原生 `ImageAttachmentRef` block。Captain 只把原图发给设置卡中独立选择的 OpenAI-compatible 视觉路由，再把识别结果转成文字 notes 交给 GPT Planner 与 DeepSeek Worker。视觉调用不发送 `reasoningEffort`，由提供方使用默认强度。若所选模型明确声明仅支持文本，Captain 会在同一提供方内选择支持图片的模型，并依次优先 Terra、Luna；提供方没有声明图片模型时会在分发前报错，并提示补上 `input: [text, image]`。
 
 ## 设置
 
-浏览器半会在 `设置 -> 插件 -> 船长` 注册设置卡。Provider 与模型下拉框读取 Host 实时的全局 `llm.models` 目录。即使中转站没有返回 reasoning 元数据，GPT 中转路由也会显示实际支持的 `low`、`medium`、`high`、`xhigh`；其他路由按模型声明的精确档位显示，并提供使用模型默认值的自动选项。审核开关关闭时，Diff 审核自动改用当前 DeepSeek 执行器路由。Captain 策略和调度模式使用下拉框，数值限制使用带范围的数字控件。Planner、Worker、Reviewer、视觉路由、策略、审核开关和编排参数都会先进入草稿，再通过 Host 的 `captain` 设置命名空间保存。
+浏览器半会在 `设置 -> 插件 -> 船长` 注册设置卡。Provider 与模型下拉框读取 Host 实时的全局 `llm.models` 目录。即使中转站没有返回 reasoning 元数据，GPT 中转路由也会显示实际支持的 `low`、`medium`、`high`、`xhigh`；其他路由按模型声明的精确档位显示，并提供使用模型默认值的自动选项。视觉模型下拉框优先显示 Luna、Terra、vision、VL 与 omni 模型，视觉调用使用提供方默认强度，因此不显示思考强度控件。审核开关关闭时，Diff 审核自动改用当前 DeepSeek 执行器路由。Captain 策略和调度模式使用下拉框，数值限制使用带范围的数字控件。Planner、Worker、Reviewer、视觉路由、策略、审核开关和编排参数都会先进入草稿，再通过 Host 的 `captain` 设置命名空间保存。
 
 组合项可以直接指定中转路由：
 
@@ -61,7 +61,25 @@ Planner 返回 JSON 依赖 DAG。文件所有权不重叠的 Worker 会在 Token
       provider: gpt-relay
       model: gpt-5.6-terra
       reasoningEffort: ultra
+    vision:
+      provider: gpt-relay
+      model: gpt-5.6-terra
+      reasoningEffort: ''
     reviewerEnabled: true
+```
+
+对于内置目录里不存在的中转模型，需要在普通 `llm-pi-ai` 提供方配置里声明图片输入：
+
+```yaml
+llm-pi-ai:
+  providers:
+    gpt-relay:
+      models:
+        - id: gpt-5.6-luna
+          input: [text, image]
+        - id: gpt-5.6-sol
+        - id: gpt-5.6-terra
+          input: [text, image]
 ```
 
 `maxAgents` 是上限，不是固定开几个 Agent。`mode: auto` 配合 `adaptiveConcurrency: true` 会在任务成功后增加并发，在中转站限流或超时后降低并发；`maxParallel: 0` 使用自适应上限。并行只有在中转站仍有容量时才会降低墙钟时间，所以每轮 Token 预算仍然显式受控。
@@ -90,7 +108,7 @@ Planner、Worker、返工和 Reviewer 调用分别受配置预算控制，最终
 
 #### What the model sees
 
-用户的 `ImageAttachmentRef` block 通过现有 LLM content 词汇转发到视觉路由，浏览器路径和 base64 不会进入 prompt 文本。
+用户的 `ImageAttachmentRef` block 通过现有 LLM content 词汇转发到解析后的图片模型。视觉响应会变成 Planner 与 Worker 可见的 `Vision companion notes`；浏览器路径和 base64 不会进入 prompt 文本，Sol Planner 也不会收到原图。
 
 #### Token effect
 

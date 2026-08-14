@@ -1,17 +1,18 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
-import { createUserMessage, type ContentBlock, type GenerateOptions, type LlmResolvedModelInfo, type Message, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, type ContentBlock, type GenerateOptions, type LlmModelInfo, type LlmResolvedModelInfo, type Message, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { CaptainCheckpoint, CaptainConfig, CaptainPlan, CaptainRoleRoute, CaptainTask, CaptainTextResult, CaptainWorkerResult } from './types.ts'
 import { compatibleReasoningEffort, resolvedRoleRoutes } from './presets.ts'
 import { advanceCheckpoint, incrementalDiff, type GitReader } from './diff.ts'
 import { parseReview, repairTasks, reviewPrompt } from './reviewer.ts'
 import { createSchedulerState, finishTask, isSettled, readyTasks, settleBlockedTasks, startTask, validateTasks } from './scheduler.ts'
-import { visionRequest, type CaptainImageInput } from './vision.ts'
+import { resolveVisionRoute, visionRequest, type CaptainImageInput } from './vision.ts'
 
 /** LLM call facade kept small so the orchestrator is deterministic in tests. */
 export interface CaptainCall {
   stream(options: GenerateOptions): AsyncIterable<StreamChunk>
+  listModels?: (provider: string) => Promise<readonly LlmModelInfo[]>
   resolveModelInfo?: (provider: string, model: string) => Promise<LlmResolvedModelInfo>
 }
 
@@ -29,7 +30,13 @@ export class CaptainOrchestrator {
   async run(options: GenerateOptions): Promise<string> {
     const config = policyForRequest(this.config(), options.reasoningEffort)
     const routes = resolvedRoleRoutes(config)
-    const taskText = await this.taskText(options, config.vision)
+    const input = await this.taskInput(options, config.vision)
+    if (input.visionNotes !== undefined && isImageAnalysisTask(input.text)) {
+      return input.visionNotes.trim() || input.text
+    }
+    const taskText = input.visionNotes === undefined
+      ? input.text
+      : `${input.text}\n\nVision companion notes:\n${input.visionNotes}`
     if (isConversationalTask(taskText)) {
       const reply = await this.call(routes.planner, conversationalPrompt(taskText), options)
       return reply.text.trim() || taskText
@@ -150,25 +157,27 @@ export class CaptainOrchestrator {
     return parseReview(result.text)
   }
 
-  private async taskText(options: GenerateOptions, route: CaptainRoleRoute): Promise<string> {
+  private async taskInput(options: GenerateOptions, route: CaptainRoleRoute): Promise<{ text: string; visionNotes?: string }> {
     const message = latestUserMessage(options.messages)
     const task = message === undefined ? '' : textOf(message)
     const images = message === undefined ? [] : imageInputsOf([message])
-    if (images.length === 0) return task
+    if (images.length === 0) return { text: task }
+    const visionRoute = this.llm.listModels === undefined
+      ? { ...route, reasoningEffort: '' }
+      : resolveVisionRoute(route, await this.llm.listModels(route.provider))
     const prompt = 'Inspect the attached images and summarize only details relevant to the user task. Return concise factual notes for the GPT planner and DeepSeek implementation workers.'
-    const request = visionRequest(route, [createUserMessage({
+    const request = visionRequest(visionRoute, [createUserMessage({
       content: [{ type: 'text', text: prompt }],
       source: { kind: 'user' },
     })], images)
     const vision = await collectText(this.llm.stream({
       ...request,
-      ...await this.reasoningOptions(route),
       ...options.system === undefined ? {} : { system: options.system },
       ...options.signal === undefined ? {} : { signal: options.signal },
       ...options.sessionId === undefined ? {} : { sessionId: options.sessionId },
       ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
     }))
-    return `${task}\n\nVision companion notes:\n${vision.text}`
+    return { text: task, visionNotes: vision.text }
   }
 
   private async call(route: CaptainRoleRoute, prompt: string, source: GenerateOptions, maxTokens?: number): Promise<CaptainTextResult> {
@@ -280,6 +289,15 @@ function plannerPrompt(task: string): string {
 /** Identify short social turns that should not start a repository-changing run. */
 export function isConversationalTask(task: string): boolean {
   return /^(?:\u65e9\u4e0a\u597d|\u4e2d\u5348\u597d|\u4e0b\u5348\u597d|\u665a\u4e0a\u597d|\u5348\u5b89|\u665a\u5b89|\u4f60\u597d|\u60a8\u597d|\u55e8|\u54c8\u55bd|hello|hi|hey|\u5728\u5417|\u5728\u7ebf\u5417|\u8c22\u8c22|\u591a\u8c22)[!！,.\uFF0C\u3002?？\s]*$/iu.test(task.trim())
+}
+
+/** Whether a short image turn asks only for visual facts rather than repository work. */
+export function isImageAnalysisTask(task: string): boolean {
+  const normalized = task.trim()
+  if (normalized.length === 0 || normalized.length > 300) return false
+  const asksAboutImage = /(?:识别|描述|说明|看看|看下|图里|图片|截图|image|screenshot|photo|picture)/i.test(normalized)
+  const requestsImplementation = /(?:修复|修改|实现|代码|编写|开发|部署|提交|发布|fix|change|implement|code|build|deploy|commit|release)/i.test(normalized)
+  return asksAboutImage && !requestsImplementation
 }
 
 function conversationalPrompt(task: string): string {

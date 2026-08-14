@@ -3,6 +3,7 @@ import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-cli
 import type { CaptainCardFace, CaptainCardState } from './captain-card-controller.ts'
 import css from './CaptainSettingsCard.module.css'
 import type { CaptainConfig, CaptainRoleRoute } from '../types.ts'
+import { isLikelyVisionModel } from '../vision-model.ts'
 
 const GPT_RELAY_EFFORTS = [
   { value: 'low', labelKey: 'effortLow' },
@@ -204,8 +205,11 @@ function RoleSection({
   const providerOptions = groups.map(group => ({ value: group.id, label: displayProviderName(group.id, group.name) }))
   appendCurrentOption(providerOptions, route.provider, displayProviderName(route.provider, route.provider))
   const group = groups.find(entry => entry.id === route.provider)
-  const modelOptions = (group?.models ?? []).map(model => ({ value: model.id, label: model.name }))
-  appendCurrentOption(modelOptions, route.model)
+  const providerModels = group?.models ?? []
+  const likelyVisionModels = role === 'vision' ? providerModels.filter(model => isLikelyVisionModel(model.id)) : []
+  const selectableModels = role === 'vision' && likelyVisionModels.length > 0 ? likelyVisionModels : providerModels
+  const modelOptions = selectableModels.map(model => ({ value: model.id, label: model.name }))
+  if (role !== 'vision' || likelyVisionModels.length === 0) appendCurrentOption(modelOptions, route.model)
   const model = group?.models.find(entry => entry.id === route.model)
   const advertisedEfforts = model?.reasoning?.efforts
     ?? (isGptRelayModel(route.provider, route.model)
@@ -249,13 +253,13 @@ function RoleSection({
         disabled={disabled}
         onChange={(value) => { onEdit(`${role}.model`, value) }}
       />
-      <SelectField
+      {role !== 'vision' && <SelectField
         label={t('effort')}
         value={effort}
         options={effortOptions}
         disabled={disabled}
         onChange={(value) => { onEdit(`${role}.reasoningEffort`, value) }}
-      />
+      />}
       </div>}
   </div>
 }

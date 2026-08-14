@@ -1,10 +1,11 @@
 import type { Context } from '@deepseek-ai/cordis';
-import { type GenerateOptions, type LlmResolvedModelInfo, type Message } from '@deepseek-ai/dsh-llm';
+import { type GenerateOptions, type LlmModelInfo, type LlmResolvedModelInfo, type Message } from '@deepseek-ai/dsh-llm';
 import type { StreamChunk } from '@deepseek-ai/dsh-llm';
 import type { CaptainConfig, CaptainTextResult } from './types.ts';
 /** LLM call facade kept small so the orchestrator is deterministic in tests. */
 export interface CaptainCall {
     stream(options: GenerateOptions): AsyncIterable<StreamChunk>;
+    listModels?: (provider: string) => Promise<readonly LlmModelInfo[]>;
     resolveModelInfo?: (provider: string, model: string) => Promise<LlmResolvedModelInfo>;
 }
 /** Host orchestrator for one synthetic Captain request. */
@@ -19,7 +20,7 @@ export declare class CaptainOrchestrator {
     private executeTasks;
     private worker;
     private review;
-    private taskText;
+    private taskInput;
     private call;
     /** Keep Captain policy labels compatible with the selected provider model. */
     private reasoningOptions;
@@ -30,6 +31,8 @@ export declare class CaptainOrchestrator {
 export declare function collectText(stream: AsyncIterable<StreamChunk>): Promise<CaptainTextResult>;
 /** Identify short social turns that should not start a repository-changing run. */
 export declare function isConversationalTask(task: string): boolean;
+/** Whether a short image turn asks only for visual facts rather than repository work. */
+export declare function isImageAnalysisTask(task: string): boolean;
 /**
  * Return text from the latest direct user message, excluding history and injected context.
  * @param messages - Complete model request history.

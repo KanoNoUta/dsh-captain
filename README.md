@@ -35,13 +35,13 @@ Captain calls the configured provider routes through the existing OpenAI-compati
 
 The planner returns a JSON dependency DAG. Workers with disjoint file ownership run concurrently under the configured token budget and adaptive parallel limit. A reviewer receives the acceptance criteria, worker reports, and the current incremental Git diff. A failed review selects only tasks named by findings for repair; an unscoped finding rechecks the full plan. A passing review advances the in-memory checkpoint used by the next run.
 
-Short conversational greetings take a direct GPT planner response without starting workers or reviewers, so a social turn cannot trigger a repository diff review. Targeted repair rounds include prerequisite tasks so the scheduler always receives a runnable dependency subgraph.
+Short conversational greetings take a direct GPT planner response without starting workers or reviewers, so a social turn cannot trigger a repository diff review. A short image-identification or description request returns the vision notes directly; image turns that ask for code, fixes, deployment, commits, or releases continue through planning and implementation. Targeted repair rounds include prerequisite tasks so the scheduler always receives a runnable dependency subgraph.
 
-Image attachments remain native `ImageAttachmentRef` blocks. The vision route is an OpenAI-compatible GPT route selected independently in the Captain settings card, so attachment transport stays owned by the existing attachment and API packages.
+Image attachments remain native `ImageAttachmentRef` blocks. Captain sends them only to the independently selected OpenAI-compatible vision route, converts that response into text notes, and gives the notes to the GPT planner and DeepSeek workers. Vision calls omit `reasoningEffort` so the provider applies its own default. If the selected model explicitly advertises text-only input, Captain selects an image-capable model from the same provider, preferring Terra and then Luna; a provider with no declared image model fails before dispatch with the missing `input: [text, image]` correction.
 
 ## Settings
 
-The browser half contributes a card to `Settings -> Plugins -> Captain`. Provider and model selects read the live host-wide `llm.models` catalog. GPT relay routes expose their supported `low`, `medium`, `high`, and `xhigh` controls even when a relay omits reasoning metadata; other routes use their exact advertised efforts plus an automatic provider-default choice. Captain policy and scheduling mode are selects; numeric limits use bounded number controls. The reviewer toggle switches between the dedicated GPT reviewer route and the current DeepSeek worker route. The card stages planner, worker, reviewer, vision, policy, reviewer toggle, and orchestration settings and writes them through the Host settings namespace `captain`.
+The browser half contributes a card to `Settings -> Plugins -> Captain`. Provider and model selects read the live host-wide `llm.models` catalog. GPT relay routes expose their supported `low`, `medium`, `high`, and `xhigh` controls even when a relay omits reasoning metadata; other routes use their exact advertised efforts plus an automatic provider-default choice. The Vision selector prefers dedicated Luna, Terra, vision, VL, and omni model names and has no reasoning-effort control because vision calls use the provider default. Captain policy and scheduling mode are selects; numeric limits use bounded number controls. The reviewer toggle switches between the dedicated GPT reviewer route and the current DeepSeek worker route. The card stages planner, worker, reviewer, vision, policy, reviewer toggle, and orchestration settings and writes them through the Host settings namespace `captain`.
 
 The composition entry is intentionally relay-oriented:
 
@@ -61,7 +61,25 @@ The composition entry is intentionally relay-oriented:
       provider: gpt-relay
       model: gpt-5.6-terra
       reasoningEffort: ultra
+    vision:
+      provider: gpt-relay
+      model: gpt-5.6-terra
+      reasoningEffort: ''
     reviewerEnabled: true
+```
+
+The normal `llm-pi-ai` provider profile must declare image input for gateway models that are absent from its built-in catalog:
+
+```yaml
+llm-pi-ai:
+  providers:
+    gpt-relay:
+      models:
+        - id: gpt-5.6-luna
+          input: [text, image]
+        - id: gpt-5.6-sol
+        - id: gpt-5.6-terra
+          input: [text, image]
 ```
 
 `maxAgents` is a ceiling, not a fixed fan-out. `mode: auto` and `adaptiveConcurrency: true` grow parallelism after successful work and reduce it after provider rate limits or timeouts; `maxParallel: 0` uses the adaptive ceiling. Token budgets remain explicit because parallel requests improve wall-clock latency only while the relay has spare capacity.
@@ -90,7 +108,7 @@ Each nested role call has its own provider/model prefix; changing a role route c
 
 #### What the model sees
 
-User `ImageAttachmentRef` blocks are forwarded to the configured vision route through the existing LLM content vocabulary; no browser path or base64 value is inserted into prompt text.
+User `ImageAttachmentRef` blocks are forwarded to the resolved image-capable vision route through the existing LLM content vocabulary. Its text response becomes `Vision companion notes` for the planner and workers; no browser path or base64 value is inserted into prompt text, and the Sol planner never receives the original image.
 
 #### Token effect
 

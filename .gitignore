@@ -1,6 +1,8 @@
 node_modules/
 coverage/
 *.tsbuildinfo
+lib/types/**/*.js
+lib/types/**/*.map
 .env
 .env.*
 !.env.example

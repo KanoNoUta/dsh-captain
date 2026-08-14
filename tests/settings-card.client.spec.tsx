@@ -25,7 +25,7 @@ const state: CaptainCardState = {
         id: 'gpt-5.6-sol',
         name: 'GPT-5.6 Sol',
         reasoning: { efforts: [{ id: 'high', name: 'High' }, { id: 'max', name: 'Max' }] },
-      }],
+      }, { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna' }, { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra' }],
     },
     {
       id: 'deepseek-official',
@@ -104,5 +104,15 @@ describe('Captain settings card', () => {
     const provider = within(worker).getByRole('combobox', { name: en.provider }) as HTMLSelectElement
     expect([...provider.options].map(option => option.textContent)).toContain('Official DeepSeek')
     expect([...provider.options].map(option => option.textContent)).toContain('OpenCode DeepSeek')
+  })
+
+  it('offers dedicated Luna and Terra routes for vision instead of the Sol planner', () => {
+    renderCard()
+    const vision = screen.getByRole('heading', { name: en.vision }).parentElement?.parentElement
+    if (vision == null) throw new Error('vision section missing')
+    const fields = within(vision)
+    const model = fields.getByRole('combobox', { name: en.model }) as HTMLSelectElement
+    expect([...model.options].map(option => option.value)).toEqual(['gpt-5.6-luna', 'gpt-5.6-terra'])
+    expect(fields.queryByRole('combobox', { name: en.effort })).toBeNull()
   })
 })

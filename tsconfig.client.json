@@ -12,7 +12,8 @@
     "src/client/constants.ts",
     "src/client/index.ts",
     "src/client/locales.ts",
-    "src/types.ts"
+    "src/types.ts",
+    "src/vision-model.ts"
   ],
   "references": [
     { "path": "../../../vendor/cordis" },
