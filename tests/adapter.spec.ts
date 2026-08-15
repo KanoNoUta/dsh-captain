@@ -81,6 +81,11 @@ describe('CaptainAdapter native parent loop', () => {
 
     const plannerRequests = requests.filter(request => request.provider === 'gpt-relay' && requestText(request).includes('planning brain'))
     expect(plannerRequests).toHaveLength(1)
+    const workerRequests = requests.filter(request => request.provider === 'deepseek-official')
+    expect(workerRequests).toHaveLength(2)
+    expect(requestText(workerRequests[0])).toContain('GPT Captain plan:')
+    expect(requestText(workerRequests[1])).not.toContain('GPT Captain plan:')
+    expect(requestText(workerRequests[1])).toContain('Continue the current Captain execution')
     expect(second).toContainEqual({ type: 'block-start', index: 0, blockType: 'reasoning' })
     expect(second).toContainEqual({ type: 'reasoning-delta', index: 0, text: 'DeepSeek native reasoning.' })
     expect(second).toContainEqual({ type: 'block-end', index: 0, block: { type: 'reasoning', text: 'DeepSeek native reasoning.' } })

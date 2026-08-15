@@ -156,13 +156,16 @@ export class CaptainOrchestrator {
     options: GenerateOptions,
     turn: CaptainExecutionTurn,
     feedback?: string,
+    includeDirective = true,
   ): Promise<GenerateOptions> {
     const config = policyForRequest(this.config(), options.reasoningEffort)
     const route = resolvedRoleRoutes(config).worker
     const reasoning = await this.reasoningOptions(route)
-    const directive = feedback === undefined
+    const directive = includeDirective && feedback === undefined
       ? turn.directive
-      : `${turn.directive}\n\nGPT independent review requires another implementation pass:\n${feedback}\nUse the native tools now, fix every finding, rerun focused checks, and only then report completion.`
+      : feedback === undefined
+        ? continuationDirective()
+        : `${continuationDirective()}\n\nGPT independent review requires another implementation pass:\n${feedback}\nUse the native tools now, fix every finding, rerun focused checks, and only then report completion.`
     const {
       provider: _captainProvider,
       model: _captainModel,
@@ -331,6 +334,10 @@ export class CaptainOrchestrator {
       return { head: 'unknown', patch: '', changedFiles: [], hash: '00000000', available: false }
     }
   }
+}
+
+function continuationDirective(): string {
+  return 'Continue the current Captain execution from the latest native tool/result state. Do not restate the Captain plan. Use the native tools when work remains, and report completion only after verification.'
 }
 
 /**

@@ -16,6 +16,7 @@ interface ActiveCaptainRun {
   turn: CaptainExecutionTurn
   repairRounds: number
   feedback?: string
+  directiveSent: boolean
 }
 
 interface OpenBlock {
@@ -176,7 +177,7 @@ export class CaptainAdapter extends LlmAdapter {
     try {
       if (continuation && active === undefined) {
         const recovered = this.orchestrator.recover(options)
-        active = { turn: recovered, repairRounds: 0 }
+        active = { turn: recovered, repairRounds: 0, directiveSent: false }
         if (key !== undefined) this.activeRuns.set(key, active)
       } else if (!continuation) {
         if (key !== undefined) this.activeRuns.delete(key)
@@ -187,7 +188,7 @@ export class CaptainAdapter extends LlmAdapter {
           queue.push({ type: 'finish', reason: { kind: 'stop' } })
           return
         }
-        active = { turn: prepared, repairRounds: 0 }
+        active = { turn: prepared, repairRounds: 0, directiveSent: false }
         if (key !== undefined) this.activeRuns.set(key, active)
         emitReasoning(`GPT Captain Plan\n${prepared.directive}`)
       }
@@ -195,7 +196,8 @@ export class CaptainAdapter extends LlmAdapter {
       if (active === undefined) throw new Error('Captain native execution state was not initialized')
 
       for (;;) {
-        const request = await this.orchestrator.workerRequest(options, active.turn, active.feedback)
+        const request = await this.orchestrator.workerRequest(options, active.turn, active.feedback, !active.directiveSent)
+        active.directiveSent = true
         const worker = await forwardNativeStream(
           this.ctx.llm.stream(request),
           queue,
