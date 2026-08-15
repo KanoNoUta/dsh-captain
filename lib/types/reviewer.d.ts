@@ -1,7 +1,11 @@
 import type { CaptainReview, CaptainTask, CaptainWorkerResult } from './types.ts';
 /** Parse a reviewer response without trusting provider prose as control data. */
 export declare function parseReview(raw: string): CaptainReview;
-/** Whether one malformed provider response merits the single protocol correction retry. */
+/**
+ * Whether one malformed provider response merits the single protocol correction retry.
+ * @param review - Parsed review or parser-generated protocol finding.
+ * @returns True for a reviewer format failure.
+ */
 export declare function reviewNeedsRetry(review: CaptainReview): boolean;
 /** Select only tasks touched by reviewer findings; an unscoped finding rechecks every task. */
 export declare function repairTasks(tasks: readonly CaptainTask[], review: CaptainReview): CaptainTask[];

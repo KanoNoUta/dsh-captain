@@ -30,9 +30,18 @@ export declare class CaptainOrchestrator {
     private readDiff;
     private changedFiles;
 }
-/** Resolve the repository working directory carried by the parent Agent session. */
+/**
+ * Resolve the repository working directory carried by the parent Agent session.
+ * @param ctx - Host context containing the live Agent registry.
+ * @param sessionId - Parent Agent identity from the model request.
+ * @returns The session workspace path, or undefined without a live parent workspace.
+ */
 export declare function workspaceCwdFor(ctx: Context, sessionId: SessionId | undefined): string | undefined;
-/** Whether a worker returned provider tool syntax as text instead of a final work report. */
+/**
+ * Whether a worker returned provider tool syntax as text instead of a final work report.
+ * @param raw - Worker result text.
+ * @returns True when the complete response is a DSML tool-call envelope.
+ */
 export declare function isToolCallOnlyOutput(raw: string): boolean;
 /** Collect visible text and usage from a canonical stream. */
 export declare function collectText(stream: AsyncIterable<StreamChunk>): Promise<CaptainTextResult>;

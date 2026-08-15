@@ -33,12 +33,10 @@ export function parseReview(raw: string): CaptainReview {
 /**
  * Whether one malformed provider response merits the single protocol correction retry.
  * @param review - Parsed review or parser-generated protocol finding.
- * @returns True only for the parser's own format failures.
+ * @returns True for a reviewer format failure.
  */
 export function reviewNeedsRetry(review: CaptainReview): boolean {
-  if (review.findings.length !== 1) return false
-  const finding = review.findings[0]
-  return finding !== undefined && finding.taskId === undefined && (finding.id === 'review-format' || finding.id === 'review-json')
+  return review.findings.some(finding => finding.id === 'review-format' || finding.id === 'review-json')
 }
 
 /** Select only tasks touched by reviewer findings; an unscoped finding rechecks every task. */
