@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-captain
+# @kanonouta/dsh-captain
 
 English | [中文](README.zh.md)
 
@@ -20,7 +20,7 @@ git submodule add https://github.com/KanoNoUta/dsh-captain.git packages/extensio
 git apply packages/extensions/captain/patches/deepseek-harness-integration.patch
 pnpm install
 pnpm exec tsc -b packages/extensions/captain/tsconfig.host.json --pretty false
-pnpm --filter @deepseek-ai/dsh-captain run bundle
+pnpm --filter @kanonouta/dsh-captain run bundle
 ```
 
 The optional source integration patch adds both TypeScript compiler faces and keeps official DeepSeek and OpenCode DeepSeek routes distinguishable in the native model selector. Normal `dsh plugin add` installation uses `cordis.patch.yml` and does not require that patch.
@@ -49,7 +49,7 @@ The composition entry is intentionally relay-oriented:
 
 ```yaml
 - id: captain
-  name: '@deepseek-ai/dsh-captain'
+  name: '@kanonouta/dsh-captain'
   config:
     planner:
       provider: gpt-relay
@@ -88,7 +88,7 @@ llm-pi-ai:
 
 ## Package faces
 
-The root export is the Host plugin and pure orchestration helpers. The `/client` export is the browser plugin and settings-card types. `pnpm --filter @deepseek-ai/dsh-captain run bundle` produces both faces.
+The root export is the Host plugin and pure orchestration helpers. The `/client` export is the browser plugin and settings-card types. `pnpm --filter @kanonouta/dsh-captain run bundle` produces both faces.
 
 ## Model Experience
 

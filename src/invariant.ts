@@ -1,8 +1,8 @@
-/** Package-owned invariant companion for `@deepseek-ai/dsh-captain`. */
+/** Package-owned invariant companion for `@kanonouta/dsh-captain`. */
 import type { Context } from '@deepseek-ai/cordis'
 import type { InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 
-const PACKAGE_NAME = '@deepseek-ai/dsh-captain'
+const PACKAGE_NAME = '@kanonouta/dsh-captain'
 export const name = 'captain-invariant'
 export const inject = ['invariants']
 /** No runtime invariant: Captain's relation is covered by its host/client integration tests. */

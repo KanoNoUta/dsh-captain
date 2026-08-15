@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-captain
+# @kanonouta/dsh-captain
 
 [English](README.md) | 中文
 
@@ -20,7 +20,7 @@ git submodule add https://github.com/KanoNoUta/dsh-captain.git packages/extensio
 git apply packages/extensions/captain/patches/deepseek-harness-integration.patch
 pnpm install
 pnpm exec tsc -b packages/extensions/captain/tsconfig.host.json --pretty false
-pnpm --filter @deepseek-ai/dsh-captain run bundle
+pnpm --filter @kanonouta/dsh-captain run bundle
 ```
 
 可选的源码集成补丁会加入 Host/Client TypeScript 编译入口，并在原生模型选择器中区分官方 DeepSeek 和 OpenCode DeepSeek 路由。普通 `dsh plugin add` 安装由 `cordis.patch.yml` 挂载，不需要该补丁。
@@ -49,7 +49,7 @@ Git 审核始终使用父 Agent Session 的 `cwd`。请求缺少该工作区元�
 
 ```yaml
 - id: captain
-  name: '@deepseek-ai/dsh-captain'
+  name: '@kanonouta/dsh-captain'
   config:
     planner:
       provider: gpt-relay
@@ -88,7 +88,7 @@ llm-pi-ai:
 
 ## 包导出
 
-根导出是 Host 插件和编排纯函数；`/client` 导出是浏览器插件与设置卡类型。运行 `pnpm --filter @deepseek-ai/dsh-captain run bundle` 会生成两侧产物。
+根导出是 Host 插件和编排纯函数；`/client` 导出是浏览器插件与设置卡类型。运行 `pnpm --filter @kanonouta/dsh-captain run bundle` 会生成两侧产物。
 
 ## 模型体验
 

@@ -9,7 +9,7 @@ index b06e63b..f35f273 100644
 +    # Captain owns the synthetic model route: GPT plans and reviews while
 +    # DeepSeek workers execute through the configured relay routes.
 +    - id: captain
-+      name: '@deepseek-ai/dsh-captain'
++      name: '@kanonouta/dsh-captain'
 +
      - id: cordis-host-runner
        name: '@deepseek-ai/dsh-cordis-host-runner'
@@ -22,7 +22,7 @@ index ca4709a..17d892f 100644
      "@deepseek-ai/dsh-client-ui-workflow-run": "workspace:^",
      "@deepseek-ai/dsh-client-ui-trajectory": "workspace:^",
      "@deepseek-ai/dsh-client-ui-workspace": "workspace:^",
-+    "@deepseek-ai/dsh-captain": "workspace:^",
++    "@kanonouta/dsh-captain": "workspace:^",
      "@deepseek-ai/dsh-cmdline": "workspace:^",
      "@deepseek-ai/dsh-code-runtime-worker-thread": "workspace:^",
      "@deepseek-ai/dsh-cordis-client-runner": "workspace:^",

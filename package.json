@@ -1,5 +1,5 @@
 {
-  "name": "@deepseek-ai/dsh-captain",
+  "name": "@kanonouta/dsh-captain",
   "description": "Captain GPT planner, DeepSeek worker, GPT reviewer orchestration plugin",
   "version": "0.1.0-rc.9",
   "publishConfig": {

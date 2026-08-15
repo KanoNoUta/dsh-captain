@@ -1,4 +1,4 @@
-/** Package-owned invariant companion for `@deepseek-ai/dsh-captain`. */
+/** Package-owned invariant companion for `@kanonouta/dsh-captain`. */
 import type { Context } from '@deepseek-ai/cordis';
 export declare const name = "captain-invariant";
 export declare const inject: string[];
