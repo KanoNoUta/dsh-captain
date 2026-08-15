@@ -45,12 +45,12 @@ const state: CaptainCardState = {
   },
 }
 
-function renderCard() {
+function renderCard(cardState: CaptainCardState = state) {
   const actions = { edit: vi.fn(), loadModels: vi.fn(), save: vi.fn(), reset: vi.fn() }
   const props = {
     ...actions,
     t: (key: keyof typeof en) => en[key],
-    useCaptainCard: (selector: (value: CaptainCardState) => unknown) => selector(state),
+    useCaptainCard: (selector: (value: CaptainCardState) => unknown) => selector(cardState),
   } as unknown as CaptainSettingsCardProps
   render(<CaptainSettingsCard {...props} />)
   fireEvent.click(screen.getByRole('button', { name: new RegExp(en.title) }))
@@ -65,13 +65,13 @@ describe('Captain settings card', () => {
     const planner = screen.getByRole('heading', { name: en.planner }).parentElement?.parentElement
     if (planner == null) throw new Error('planner section missing')
     const plannerFields = within(planner)
-    expect((plannerFields.getByRole('combobox', { name: en.provider }) as HTMLSelectElement).value).toBe('gpt-relay')
-    expect((plannerFields.getByRole('combobox', { name: en.model }) as HTMLSelectElement).value).toBe('gpt-5.6-sol')
-    expect((plannerFields.getByRole('combobox', { name: en.effort }) as HTMLSelectElement).value).toBe('high')
+    expect(plannerFields.getByRole<HTMLSelectElement>('combobox', { name: en.provider }).value).toBe('gpt-relay')
+    expect(plannerFields.getByRole<HTMLSelectElement>('combobox', { name: en.model }).value).toBe('gpt-5.6-sol')
+    expect(plannerFields.getByRole<HTMLSelectElement>('combobox', { name: en.effort }).value).toBe('high')
 
-    expect((screen.getByRole('combobox', { name: en.policy }) as HTMLSelectElement).value).toBe('ultra')
-    expect((screen.getByRole('combobox', { name: en.mode }) as HTMLSelectElement).value).toBe('auto')
-    expect((screen.getByRole('spinbutton', { name: en.maxAgents }) as HTMLInputElement).valueAsNumber).toBe(16)
+    expect(screen.getByRole<HTMLSelectElement>('combobox', { name: en.policy }).value).toBe('ultra')
+    expect(screen.getByRole<HTMLSelectElement>('combobox', { name: en.mode }).value).toBe('auto')
+    expect(screen.getByRole<HTMLInputElement>('spinbutton', { name: en.maxAgents }).valueAsNumber).toBe(16)
   })
 
   it('shows the GPT relay low, medium, high, and xhigh controls when metadata is absent', () => {
@@ -114,5 +114,16 @@ describe('Captain settings card', () => {
     const model = fields.getByRole('combobox', { name: en.model }) as HTMLSelectElement
     expect([...model.options].map(option => option.value)).toEqual(['gpt-5.6-luna', 'gpt-5.6-terra'])
     expect(fields.queryByRole('combobox', { name: en.effort })).toBeNull()
+  })
+
+  it('states that disabling review skips the review and repair loop', () => {
+    const disabledReview = structuredClone(state)
+    disabledReview.draft.reviewerEnabled = false
+
+    renderCard(disabledReview)
+
+    const checkbox = screen.getByRole('checkbox', { name: 'Enable review' }) as HTMLInputElement
+    expect(checkbox.checked).toBe(false)
+    expect(screen.getByText('Review is disabled; Captain skips diff review and repair.')).toBeDefined()
   })
 })

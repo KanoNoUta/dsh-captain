@@ -1,6 +1,9 @@
 import type { CaptainFinding, CaptainReview, CaptainTask, CaptainWorkerResult } from './types.ts'
 
-/** Parse a reviewer response without trusting provider prose as control data. */
+/** Parse a reviewer response without trusting provider prose as control data.
+ * @param raw - Untrusted reviewer response text.
+ * @returns Structured review with a protocol finding on malformed input.
+ */
 export function parseReview(raw: string): CaptainReview {
   const candidates = jsonObjects(raw)
   if (candidates.length === 0) {
@@ -39,7 +42,11 @@ export function reviewNeedsRetry(review: CaptainReview): boolean {
   return review.findings.some(finding => finding.id === 'review-format' || finding.id === 'review-json')
 }
 
-/** Select only tasks touched by reviewer findings; an unscoped finding rechecks every task. */
+/** Select only tasks touched by reviewer findings; an unscoped finding rechecks every task.
+ * @param tasks - Planner task list.
+ * @param review - Parsed reviewer result.
+ * @returns Tasks that should be retried, including their dependencies.
+ */
 export function repairTasks(tasks: readonly CaptainTask[], review: CaptainReview): CaptainTask[] {
   if (review.pass) return []
   const ids = new Set(review.findings.flatMap(finding => finding.taskId === undefined ? [] : [finding.taskId]))
@@ -58,7 +65,12 @@ export function repairTasks(tasks: readonly CaptainTask[], review: CaptainReview
   return tasks.filter(task => ids.has(task.id))
 }
 
-/** Render the compact review payload sent to GPT. */
+/** Render the compact review payload sent to GPT.
+ * @param acceptance - Acceptance criteria from the planner.
+ * @param workers - Outputs from completed worker tasks.
+ * @param patch - Incremental git diff under review.
+ * @returns Review prompt with a JSON-only response requirement.
+ */
 export function reviewPrompt(
   acceptance: readonly string[],
   workers: readonly CaptainWorkerResult[],

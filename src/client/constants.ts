@@ -2,6 +2,7 @@ import type { CaptainConfig } from '../types.ts'
 
 /** Browser-safe settings namespace and defaults; no Host schema imports. */
 export const CAPTAIN_SETTINGS_NAMESPACE = 'captain'
+/** Browser-safe Captain defaults mirrored from the Host settings schema. */
 export const DEFAULT_CAPTAIN_CONFIG: CaptainConfig = {
   default: { provider: 'gpt-relay', model: 'gpt-5.6-terra', reasoningEffort: '' },
   planner: { provider: 'gpt-relay', model: 'gpt-5.6-sol', reasoningEffort: '' },

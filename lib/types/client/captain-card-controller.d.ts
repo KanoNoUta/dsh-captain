@@ -39,7 +39,9 @@ export declare class CaptainCardController {
     private catalogGeneration;
     private readonly store;
     constructor(scope: SettingsScope<CaptainConfig>, api: Pick<IApiClient, 'llm'>);
-    /** Build the slot face. */
+    /** Build the slot face.
+     * @returns Browser-facing hooks and settings actions.
+     */
     inject(): CaptainCardFace;
     private snapshot;
     private publish;

@@ -7,6 +7,7 @@ const roleRoute = z.object({
   reasoningEffort: z.string().default(''),
 })
 
+/** Browser-independent defaults shared by the Host settings schema and runtime. */
 export const DEFAULT_CAPTAIN_CONFIG: CaptainConfig = {
   default: { provider: 'gpt-relay', model: 'gpt-5.6-terra', reasoningEffort: '' },
   planner: { provider: 'gpt-relay', model: 'gpt-5.6-sol', reasoningEffort: '' },

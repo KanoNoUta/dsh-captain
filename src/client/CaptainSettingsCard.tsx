@@ -239,27 +239,27 @@ function RoleSection({
     {onToggle !== undefined && enabled === false
       ? <p className={css.hint}>{t('reviewerFallback')}</p>
       : <div className={css.grid}>
-      <SelectField
-        label={t('provider')}
-        value={route.provider}
-        options={providerOptions}
-        disabled={disabled}
-        onChange={(value) => { onEdit(`${role}.provider`, value) }}
-      />
-      <SelectField
-        label={t('model')}
-        value={route.model}
-        options={modelOptions}
-        disabled={disabled}
-        onChange={(value) => { onEdit(`${role}.model`, value) }}
-      />
-      {role !== 'vision' && <SelectField
-        label={t('effort')}
-        value={effort}
-        options={effortOptions}
-        disabled={disabled}
-        onChange={(value) => { onEdit(`${role}.reasoningEffort`, value) }}
-      />}
+        <SelectField
+          label={t('provider')}
+          value={route.provider}
+          options={providerOptions}
+          disabled={disabled}
+          onChange={(value) => { onEdit(`${role}.provider`, value) }}
+        />
+        <SelectField
+          label={t('model')}
+          value={route.model}
+          options={modelOptions}
+          disabled={disabled}
+          onChange={(value) => { onEdit(`${role}.model`, value) }}
+        />
+        {role !== 'vision' && <SelectField
+          label={t('effort')}
+          value={effort}
+          options={effortOptions}
+          disabled={disabled}
+          onChange={(value) => { onEdit(`${role}.reasoningEffort`, value) }}
+        />}
       </div>}
   </div>
 }

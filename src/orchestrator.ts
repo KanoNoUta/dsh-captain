@@ -1,23 +1,78 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
-import { createUserMessage, type ContentBlock, type GenerateOptions, type LlmModelInfo, type LlmResolvedModelInfo, type Message, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import {
+  createUserMessage,
+  freezeMessage,
+  type ContentBlock,
+  type GenerateOptions,
+  type LlmModelInfo,
+  type LlmResolvedModelInfo,
+  type Message,
+  ReasoningEffortId,
+} from '@deepseek-ai/dsh-llm'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import type { CaptainCheckpoint, CaptainConfig, CaptainPlan, CaptainRoleRoute, CaptainTask, CaptainTextResult, CaptainWorkerResult } from './types.ts'
+import type {
+  CaptainCheckpoint,
+  CaptainConfig,
+  CaptainPlan,
+  CaptainReview,
+  CaptainRepositoryReader,
+  CaptainRoleRoute,
+  CaptainTextResult,
+  CaptainWorkerResult,
+} from './types.ts'
 import { compatibleReasoningEffort, resolvedRoleRoutes } from './presets.ts'
 import { advanceCheckpoint, incrementalDiff, type GitReader, type IncrementalDiff } from './diff.ts'
-import { parseReview, repairTasks, reviewNeedsRetry, reviewPrompt } from './reviewer.ts'
-import { createSchedulerState, finishTask, isSettled, readyTasks, settleBlockedTasks, startTask, validateTasks } from './scheduler.ts'
+import { parseReview, reviewNeedsRetry, reviewPrompt } from './reviewer.ts'
+import { validateTasks } from './scheduler.ts'
 import { resolveVisionRoute, visionRequest, type CaptainImageInput } from './vision.ts'
+import { formatRepositoryContext } from './repository-context.ts'
 
 /** LLM call facade kept small so the orchestrator is deterministic in tests. */
 export interface CaptainCall {
+  /** Stream one provider-neutral model request. */
   stream(options: GenerateOptions): AsyncIterable<StreamChunk>
+  /** List one provider's catalog when vision routing needs capability metadata. */
   listModels?: (provider: string) => Promise<readonly LlmModelInfo[]>
+  /** Resolve exact-model metadata before selecting a compatible effort. */
   resolveModelInfo?: (provider: string, model: string) => Promise<LlmResolvedModelInfo>
 }
 
-/** Host orchestrator for one synthetic Captain request. */
+/** GPT control-plane progress exposed to the synthetic outer stream. */
+export type CaptainControlEvent =
+  | { type: 'start'; role: 'planner' | 'reviewer'; route: CaptainRoleRoute }
+  | { type: 'delta'; role: 'planner' | 'reviewer'; text: string }
+  | { type: 'end'; role: 'planner' | 'reviewer'; route: CaptainRoleRoute }
+
+/** Receive one GPT planner or reviewer lifecycle fact for the active Captain request. */
+export type CaptainControlObserver = (event: CaptainControlEvent) => void
+
+// GPT planning needs the recent conversation, not an unbounded replay of
+// tool output. Keep this fixed safety cap below the context size of the
+// configured relay so a long worker session cannot make planning unstable.
+const MAX_PLANNER_CONTEXT_CHARS = 180_000
+
+/** A direct GPT response that bypasses repository execution. */
+export interface CaptainDirectTurn {
+  kind: 'direct'
+  text: string
+}
+
+/** A GPT plan converted into instructions for the parent Agent's native DeepSeek loop. */
+export interface CaptainExecutionTurn {
+  kind: 'execution'
+  plan: CaptainPlan
+  directive: string
+}
+
+/** Result of the independent incremental-diff review. */
+export interface CaptainReviewResult {
+  review: CaptainReview
+  diff: IncrementalDiff & { available: boolean }
+}
+
+/** Host control plane for GPT planning, native DeepSeek execution, and GPT review. */
 export class CaptainOrchestrator {
   private checkpoint: CaptainCheckpoint | undefined
   private checkpointCwd: string | undefined
@@ -26,194 +81,180 @@ export class CaptainOrchestrator {
     private readonly ctx: Context,
     private readonly config: () => CaptainConfig,
     private readonly llm: CaptainCall,
+    private readonly repository?: CaptainRepositoryReader,
   ) {}
 
-  /** Plan, execute, review, and return a user-facing summary. */
-  async run(options: GenerateOptions): Promise<string> {
+  /**
+   * Prepare a new direct-user turn without starting a hidden worker Session.
+   * @param options - Parent Agent model request.
+   * @param observe - Optional GPT reasoning observer.
+   * @returns A direct answer or the plan handed to the native DeepSeek loop.
+   */
+  async prepare(options: GenerateOptions, observe?: CaptainControlObserver): Promise<CaptainDirectTurn | CaptainExecutionTurn> {
     const config = policyForRequest(this.config(), options.reasoningEffort)
     const routes = resolvedRoleRoutes(config)
     const input = await this.taskInput(options, config.vision)
     if (input.visionNotes !== undefined && isImageAnalysisTask(input.text)) {
-      return input.visionNotes.trim() || input.text
+      return { kind: 'direct', text: input.visionNotes.trim() || input.text }
     }
     const taskText = input.visionNotes === undefined
       ? input.text
       : `${input.text}\n\nVision companion notes:\n${input.visionNotes}`
     if (isConversationalTask(taskText)) {
-      const reply = await this.call(routes.planner, conversationalPrompt(taskText), options)
-      return reply.text.trim() || taskText
+      try {
+        const reply = await this.call(routes.planner, conversationalPrompt(taskText), options, undefined, observe, 'planner')
+        return { kind: 'direct', text: reply.text.trim() || taskText }
+      } catch (error: unknown) {
+        if (options.signal?.aborted === true || !isRecoverablePlannerFailure(error)) throw error
+        this.ctx.logger?.warn(`captain: planner conversation failed; returning the user text: ${String(error)}`)
+        return { kind: 'direct', text: taskText.trim() || '收到。' }
+      }
     }
-    const plan = parsePlan((await this.call(routes.planner, plannerPrompt(taskText), options)).text, taskText)
+    const cwd = workspaceCwdFor(this.ctx, options.sessionId)
+    let repositoryContext: string | undefined
+    if (this.repository !== undefined && cwd !== undefined) {
+      try {
+        const context = await this.repository.inspect(taskText, cwd, options.signal)
+        repositoryContext = context === undefined ? undefined : formatRepositoryContext(context)
+      } catch (error: unknown) {
+        if (options.signal?.aborted === true) throw error
+        this.ctx.logger.warn(`captain: repository analysis unavailable; planning from parent context: ${String(error)}`)
+      }
+    }
+    let result: CaptainTextResult | undefined
+    try {
+      result = await this.call(routes.planner, plannerPrompt(taskText, repositoryContext), options, undefined, observe, 'planner', true)
+    } catch (error: unknown) {
+      if (options.signal?.aborted === true || !isRecoverablePlannerFailure(error)) throw error
+      this.ctx.logger?.warn(`captain: planner transport failed; falling back to native execution: ${String(error)}`)
+    }
+    const plan = parsePlan(result?.text ?? '', taskText)
     validateTasks(plan.tasks)
-    const workspaceCwd = workspaceCwdFor(this.ctx, options.sessionId)
-    const budget = { used: 0 }
-    const workers = await this.executeTasks(plan.tasks, plan.acceptance, routes.worker, options, config, budget, workspaceCwd)
-    const reviewRoute = config.reviewerEnabled ? routes.reviewer : routes.worker
-    const review = await this.review(plan, workers, reviewRoute, options, config, workspaceCwd)
-    let currentReview = review
-    let currentWorkers = workers
-    for (let round = 0; !currentReview.pass && currentWorkers.every(worker => worker.ok) && round < config.orchestration.maxRepairRounds; round += 1) {
-      const repairs = repairTasks(plan.tasks, currentReview)
-      if (repairs.length === 0) break
-      const repaired = await this.executeTasks(repairs, plan.acceptance, routes.worker, options, config, budget, workspaceCwd, currentReview.summary)
-      const byId = new Map(currentWorkers.map(worker => [worker.taskId, worker]))
-      for (const worker of repaired) byId.set(worker.taskId, worker)
-      currentWorkers = [...byId.values()]
-      currentReview = await this.review(plan, currentWorkers, reviewRoute, options, config, workspaceCwd)
+    return { kind: 'execution', plan, directive: nativeExecutionDirective(plan, config) }
+  }
+
+  /**
+   * Reconstruct a minimal execution turn after a Host restart without asking GPT to plan a tool-result continuation again.
+   * @param options - Parent request whose history still contains the direct user task.
+   * @returns A single-task native execution plan.
+   */
+  recover(options: GenerateOptions): CaptainExecutionTurn {
+    const config = policyForRequest(this.config(), options.reasoningEffort)
+    const task = currentTaskText(options.messages)
+    const plan = fallbackPlan(task)
+    return { kind: 'execution', plan, directive: nativeExecutionDirective(plan, config) }
+  }
+
+  /**
+   * Build the DeepSeek request that runs inside the parent Agent's native tool loop.
+   * @param options - Original parent request including system prompt, tools, history, and cancellation.
+   * @param turn - GPT plan for this user turn.
+   * @param feedback - Optional independent-review findings for a repair pass.
+   * @returns A worker-routed request preserving every parent execution capability.
+   */
+  async workerRequest(
+    options: GenerateOptions,
+    turn: CaptainExecutionTurn,
+    feedback?: string,
+  ): Promise<GenerateOptions> {
+    const config = policyForRequest(this.config(), options.reasoningEffort)
+    const route = resolvedRoleRoutes(config).worker
+    const reasoning = await this.reasoningOptions(route)
+    const directive = feedback === undefined
+      ? turn.directive
+      : `${turn.directive}\n\nGPT independent review requires another implementation pass:\n${feedback}\nUse the native tools now, fix every finding, rerun focused checks, and only then report completion.`
+    const {
+      provider: _captainProvider,
+      model: _captainModel,
+      reasoningEffort: _captainEffort,
+      messages: parentMessages,
+      ...parentExecutionOptions
+    } = options
+    return {
+      ...parentExecutionOptions,
+      provider: route.provider,
+      model: route.model,
+      messages: [
+        ...messagesWithoutImages(parentMessages),
+        createUserMessage({
+          content: [{ type: 'text', text: directive }],
+          source: { kind: 'plugin', plugin: 'captain', form: 'relay' },
+        }),
+      ],
+      ...reasoning,
     }
+  }
+
+  /**
+   * Review one completed native DeepSeek pass against the current incremental Git diff.
+   * @param plan - GPT plan whose acceptance criteria govern the review.
+   * @param workerOutput - Visible final text from the native DeepSeek pass.
+   * @param options - Parent request providing session identity and cancellation.
+   * @param observe - Optional reviewer reasoning observer.
+   * @returns Structured review plus the reviewed diff metadata.
+   */
+  async review(
+    plan: CaptainPlan,
+    workerOutput: string,
+    options: GenerateOptions,
+    observe?: CaptainControlObserver,
+  ): Promise<CaptainReviewResult> {
+    const config = policyForRequest(this.config(), options.reasoningEffort)
+    const routes = resolvedRoleRoutes(config)
+    const route = routes.reviewer
+    const workspaceCwd = workspaceCwdFor(this.ctx, options.sessionId)
     const diff = await this.readDiff(workspaceCwd)
-    if (currentReview.pass && diff.available) {
+    const workers: CaptainWorkerResult[] = [{
+      taskId: 'deepseek-primary',
+      ok: true,
+      output: workerOutput,
+      changedFiles: diff.changedFiles,
+      tokens: 0,
+    }]
+    const prompt = [
+      `Planned task DAG:\n${JSON.stringify(plan.tasks)}`,
+      'Judge the actual plan and acceptance criteria. An empty Git diff is correct when the plan explicitly requires observation, conversation, native-tool/UI verification, or no file changes. Do not treat a zero token-accounting placeholder as evidence that execution did not occur.',
+      reviewPrompt(plan.acceptance, workers, diff.patch),
+    ].join('\n\n')
+    const first = await this.call(route, prompt, options, config.orchestration.reviewerTokenBudget, observe, 'reviewer')
+    let review = parseReview(first.text)
+    if (reviewNeedsRetry(review)) {
+      const correction = [
+        prompt,
+        'Your previous response was not valid reviewer JSON. Return exactly one JSON object and no prose, Markdown, DSML, function calls, or tool calls.',
+      ].join('\n\n')
+      review = parseReview((await this.call(
+        route,
+        correction,
+        options,
+        config.orchestration.reviewerTokenBudget,
+        observe,
+        'reviewer',
+      )).text)
+    }
+    if (review.pass && diff.available) {
       this.checkpoint = advanceCheckpoint(diff)
       this.checkpointCwd = workspaceCwd
     }
-    const status = currentReview.pass ? 'Captain review passed.' : 'Captain review stopped with findings.'
-    const diffSummary = !diff.available
-      ? 'Incremental diff: unavailable'
-      : diff.patch
-        ? `Incremental diff: ${diff.changedFiles.join(', ') || 'workspace changes'}`
-        : 'Incremental diff: none'
-    return [status, currentReview.summary, ...currentWorkers.map(worker => `- ${worker.taskId}: ${worker.ok ? 'done' : 'failed'}${worker.error ? ` (${worker.error})` : ''}${worker.output ? `\n${worker.output}` : ''}`), diffSummary].join('\n')
+    return { review, diff }
   }
 
-  private async executeTasks(
-    tasks: readonly CaptainTask[],
-    acceptance: readonly string[],
-    route: CaptainRoleRoute,
-    options: GenerateOptions,
-    config: CaptainConfig,
-    budget: { used: number },
-    workspaceCwd: string | undefined,
-    repairContext = '',
-  ): Promise<CaptainWorkerResult[]> {
-    const orchestration = config.orchestration
-    const state = createSchedulerState(orchestration)
-    const results: CaptainWorkerResult[] = []
-    while (!isSettled(tasks, state)) {
-      for (const task of settleBlockedTasks(tasks, state)) {
-        results.push({ taskId: task.id, ok: false, output: '', changedFiles: [], tokens: 0, error: 'blocked by a failed dependency' })
-      }
-      if (isSettled(tasks, state)) break
-      const ready = readyTasks(tasks, state)
-      if (ready.length === 0) {
-        if (state.running.size > 0) {
-          await Promise.resolve()
-          continue
-        }
-        throw new Error('Captain scheduler found no ready task; the planner produced an invalid dependency graph')
-      }
-      for (const task of ready) {
-        if (budget.used + task.tokenBudget > orchestration.totalTokenBudget) {
-          throw new Error(`Captain token budget exceeded before task ${task.id}`)
-        }
-        startTask(state, task, orchestration)
-        budget.used += task.tokenBudget
-      }
-      const settled = await Promise.all(ready.map(async (task) => {
-        try {
-          const output = await this.worker(task, acceptance, route, options, repairContext)
-          finishTask(state, task, { succeeded: true }, orchestration)
-          return { taskId: task.id, ok: true, output, changedFiles: await this.changedFiles(workspaceCwd), tokens: task.tokenBudget }
-        } catch (error) {
-          finishTask(state, task, failureObservation(error), orchestration)
-          return { taskId: task.id, ok: false, output: '', changedFiles: [], tokens: task.tokenBudget, error: String(error) }
-        }
-      }))
-      results.push(...settled)
-    }
-    return results
-  }
-
-  private async worker(
-    task: CaptainTask,
-    acceptance: readonly string[],
-    route: CaptainRoleRoute,
-    options: GenerateOptions,
-    repairContext: string,
-  ): Promise<string> {
-    const prompt = [
-      'You are a DeepSeek implementation worker inside Captain.',
-      `Task ${task.id}: ${task.prompt}`,
-      `Owned files: ${task.files.join(', ') || '(infer from repository)'}`,
-      `Acceptance criteria: ${acceptance.join('; ') || '(none)'}`,
-      repairContext ? `Reviewer feedback to fix:\n${repairContext}` : '',
-      'Inspect the workspace, make the required incremental changes, run focused checks, and report changed files plus tests.',
-    ].filter(Boolean).join('\n')
-    const first = await this.workerCall(task, route, options, prompt)
-    if (!isToolCallOnlyOutput(first)) return first
-    const retryPrompt = [
-      prompt,
-      'Your previous response contained unexecuted DSML tool calls. Execute the task with the available tools now. Return a final work report with changed files and checks; do not emit DSML, XML, function calls, or tool-call markup as text.',
-    ].join('\n\n')
-    const retried = await this.workerCall(task, route, options, retryPrompt)
-    if (isToolCallOnlyOutput(retried)) throw new Error(`worker ${task.id} returned unexecuted DSML tool calls`)
-    return retried
-  }
-
-  private async workerCall(
-    task: CaptainTask,
-    route: CaptainRoleRoute,
-    options: GenerateOptions,
-    prompt: string,
-  ): Promise<string> {
-    const parent = options.sessionId === undefined ? undefined : this.ctx.agents.get(options.sessionId)
-    const workflow = this.ctx.get('workflowEngine')
-    if (parent !== undefined && workflow !== undefined) {
-      const script = `return await agent(${JSON.stringify(prompt)}, ${JSON.stringify({ label: task.id, provider: route.provider, model: route.model })})`
-      const run = workflow.start({
-        script,
-        meta: { name: `captain-${task.id}`, description: 'Captain worker' },
-        parent,
-        ...options.signal === undefined ? {} : { signal: options.signal },
-      })
-      let result
-      try {
-        result = await run.result
-      } finally {
-        await run.dispose()
-      }
-      if (result.stopReason !== 'completed') throw new Error(`worker ${task.id} stopped: ${result.stopReason}`)
-      return typeof result.value === 'string' ? result.value : JSON.stringify(result.value)
-    }
-    return (await this.call(route, prompt, options)).text
-  }
-
-  private async review(
-    plan: CaptainPlan,
-    workers: readonly CaptainWorkerResult[],
-    route: CaptainRoleRoute,
-    options: GenerateOptions,
-    config: CaptainConfig,
-    workspaceCwd: string | undefined,
-  ) {
-    const failed = workers.filter(worker => !worker.ok)
-    if (failed.length > 0) {
-      return {
-        pass: false,
-        summary: 'Worker execution failed before review.',
-        findings: failed.map(worker => ({ id: `worker-${worker.taskId}`, taskId: worker.taskId, files: worker.changedFiles, severity: 'error' as const, message: worker.error ?? 'worker failed' })),
-      }
-    }
-    const diff = await this.readDiff(workspaceCwd)
-    const prompt = reviewPrompt(plan.acceptance, workers, diff.patch)
-    const result = await this.call(route, prompt, options, config.orchestration.reviewerTokenBudget)
-    const parsed = parseReview(result.text)
-    if (!reviewNeedsRetry(parsed)) return parsed
-    const correction = [
-      prompt,
-      'Your previous response was not valid reviewer JSON. Return exactly one JSON object and no prose, Markdown, DSML, function calls, or tool calls.',
-    ].join('\n\n')
-    return parseReview((await this.call(route, correction, options, config.orchestration.reviewerTokenBudget)).text)
+  /** Return the configured maximum number of repair passes for one task turn.
+   * @returns Maximum repair passes configured for the current Captain run.
+   */
+  maxRepairRounds(): number {
+    return this.config().orchestration.maxRepairRounds
   }
 
   private async taskInput(options: GenerateOptions, route: CaptainRoleRoute): Promise<{ text: string; visionNotes?: string }> {
-    const message = latestUserMessage(options.messages)
+    const message = latestDirectUserMessage(options.messages)
     const task = message === undefined ? '' : textOf(message)
     const images = message === undefined ? [] : imageInputsOf([message])
     if (images.length === 0) return { text: task }
     const visionRoute = this.llm.listModels === undefined
       ? { ...route, reasoningEffort: '' }
       : resolveVisionRoute(route, await this.llm.listModels(route.provider))
-    const prompt = 'Inspect the attached images and summarize only details relevant to the user task. Return concise factual notes for the GPT planner and DeepSeek implementation workers.'
+    const prompt = 'Inspect the attached images and summarize only details relevant to the user task. Return concise factual notes for the GPT planner and DeepSeek executor.'
     const request = visionRequest(visionRoute, [createUserMessage({
       content: [{ type: 'text', text: prompt }],
       source: { kind: 'user' },
@@ -228,25 +269,42 @@ export class CaptainOrchestrator {
     return { text: task, visionNotes: vision.text }
   }
 
-  private async call(route: CaptainRoleRoute, prompt: string, source: GenerateOptions, maxTokens?: number): Promise<CaptainTextResult> {
+  private async call(
+    route: CaptainRoleRoute,
+    prompt: string,
+    source: GenerateOptions,
+    maxTokens?: number,
+    observe?: CaptainControlObserver,
+    role?: 'planner' | 'reviewer',
+    inheritParentContext = false,
+  ): Promise<CaptainTextResult> {
     const reasoning = await this.reasoningOptions(route)
-    return collectText(this.llm.stream({
-      provider: route.provider,
-      model: route.model,
-      messages: [createUserMessage({ content: [{ type: 'text', text: prompt }], source: { kind: 'user' } })],
-      ...reasoning,
-      ...source.system === undefined ? {} : { system: source.system },
-      ...source.signal === undefined ? {} : { signal: source.signal },
-      ...maxTokens === undefined ? {} : { maxTokens },
-    }))
+    const control = observe !== undefined && role !== undefined && isGptControlRoute(route)
+    if (control) observe({ type: 'start', role, route })
+    try {
+      return await collectText(this.llm.stream({
+        provider: route.provider,
+        model: route.model,
+        messages: [
+          ...(inheritParentContext ? plannerMessages(source.messages) : []),
+          createUserMessage({ content: [{ type: 'text', text: prompt }], source: { kind: 'user' } }),
+        ],
+        ...(inheritParentContext && source.system !== undefined ? { system: source.system } : {}),
+        ...reasoning,
+        ...source.signal === undefined ? {} : { signal: source.signal },
+        ...maxTokens === undefined ? {} : { maxTokens },
+      }), (chunk) => {
+        if (control && chunk.type === 'reasoning-delta') observe({ type: 'delta', role, text: chunk.text })
+      })
+    } finally {
+      if (control) observe({ type: 'end', role, route })
+    }
   }
 
-  /** Keep Captain policy labels compatible with the selected provider model. */
   private async reasoningOptions(route: CaptainRoleRoute): Promise<Pick<GenerateOptions, 'reasoningEffort'>> {
     if (route.reasoningEffort === '' || this.llm.resolveModelInfo === undefined) return route.reasoningEffort === ''
       ? {}
       : { reasoningEffort: ReasoningEffortId(route.reasoningEffort) }
-
     const model = await this.llm.resolveModelInfo(route.provider, route.model)
     const supported = model.reasoning?.efforts.map(effort => String(effort.id)) ?? []
     const selected = compatibleReasoningEffort(route.reasoningEffort, supported)
@@ -273,13 +331,6 @@ export class CaptainOrchestrator {
       return { head: 'unknown', patch: '', changedFiles: [], hash: '00000000', available: false }
     }
   }
-
-  private async changedFiles(workspaceCwd: string | undefined): Promise<string[]> {
-    const diff = await this.readDiff(workspaceCwd)
-    // The checkpoint is intentionally advanced only by a passing reviewer;
-    // this projection is read-only and gives the reviewer current paths.
-    return diff.changedFiles
-  }
 }
 
 /**
@@ -292,54 +343,21 @@ export function workspaceCwdFor(ctx: Context, sessionId: SessionId | undefined):
   return sessionId === undefined ? undefined : ctx.agents.get(sessionId)?.session.header.cwd
 }
 
-/**
- * Whether a worker returned provider tool syntax as text instead of a final work report.
- * @param raw - Worker result text.
- * @returns True when the complete response is a DSML tool-call envelope.
+/** Collect visible text and usage from a canonical stream.
+ * @param stream - Canonical model stream to consume.
+ * @param observe - Optional callback for each received chunk.
+ * @returns Collected visible text, chunks, and output token usage.
  */
-export function isToolCallOnlyOutput(raw: string): boolean {
-  const trimmed = raw.trim()
-  if (!/^<\s*[｜|]*DSML[｜|]*(?:tool_calls|tools_call|function_calls)\b/iu.test(trimmed)) return false
-  return /<\s*[｜|]*DSML[｜|]*(?:invoke|tool|function_calls?)\b/iu.test(trimmed)
-}
-
-function policyForRequest(config: CaptainConfig, effort: GenerateOptions['reasoningEffort']): CaptainConfig {
-  const selected = effort === undefined ? undefined : String(effort)
-  if (selected !== 'balanced' && selected !== 'high-quality' && selected !== 'ultra') return config
-  return { ...config, policy: selected }
-}
-
-function imageInputsOf(messages: readonly Message[]): CaptainImageInput[] {
-  const images: CaptainImageInput[] = []
-  const visit = (blocks: readonly ContentBlock[]): void => {
-    for (const block of blocks) {
-      if (block.type === 'image') images.push({ ref: block.attachment })
-      else if (block.type === 'tool-result') visit(block.content)
-    }
-  }
-  for (const message of messages) visit(message.content)
-  return images
-}
-
-function failureObservation(error: unknown): { succeeded: false; rateLimited?: boolean; timedOut?: boolean } {
-  const code = typeof error === 'object' && error !== null && 'failure' in error
-    ? (error as { failure?: { code?: unknown } }).failure?.code
-    : undefined
-  const message = String(error).toLowerCase()
-  return {
-    succeeded: false,
-    rateLimited: code === 'RATE_LIMIT' || message.includes('rate limit') || message.includes('429'),
-    timedOut: code === 'TIMEOUT' || message.includes('timeout'),
-  }
-}
-
-/** Collect visible text and usage from a canonical stream. */
-export async function collectText(stream: AsyncIterable<StreamChunk>): Promise<CaptainTextResult> {
+export async function collectText(
+  stream: AsyncIterable<StreamChunk>,
+  observe?: (chunk: StreamChunk) => void,
+): Promise<CaptainTextResult> {
   const chunks: StreamChunk[] = []
   let text = ''
   let outputTokens: number | undefined
   for await (const chunk of stream) {
     chunks.push(chunk)
+    observe?.(chunk)
     if (chunk.type === 'text-delta') text += chunk.text
     if (chunk.type === 'block-end' && chunk.block.type === 'text') text += text.endsWith(chunk.block.text) ? '' : chunk.block.text
     if (chunk.type === 'usage') outputTokens = chunk.usage.outputTokens
@@ -353,16 +371,54 @@ export async function collectText(stream: AsyncIterable<StreamChunk>): Promise<C
   return { text, chunks, ...outputTokens === undefined ? {} : { outputTokens } }
 }
 
-function plannerPrompt(task: string): string {
-  return ['You are the GPT planning brain inside Captain.', 'Turn the task into a small dependency DAG. Return JSON only:', '{"tasks":[{"id":string,"prompt":string,"dependsOn":string[],"files":string[],"tokenBudget":number}],"acceptance":string[]}', 'Use independent tasks for parallel work and never assign overlapping files to independent tasks.', `User task:\n${task}`].join('\n\n')
+function nativeExecutionDirective(plan: CaptainPlan, config: CaptainConfig): string {
+  const tasks = plan.tasks.map((task, index) => [
+    `${index + 1}. [${task.id}] ${task.prompt}`,
+    `   files: ${task.files.join(', ') || 'infer from the repository'}`,
+    `   depends on: ${task.dependsOn.join(', ') || 'none'}`,
+  ].join('\n')).join('\n')
+  const concurrency = config.orchestration.mode === 'fixed'
+    ? `Use up to ${config.orchestration.maxParallel || config.orchestration.maxAgents} native subagents concurrently.`
+    : `Choose ${config.orchestration.minAgents}-${config.orchestration.maxAgents} native subagents adaptively; never exceed ${config.orchestration.maxParallel || config.orchestration.maxAgents} concurrent agents.`
+  return [
+    'GPT Captain plan:',
+    tasks,
+    `Acceptance criteria:\n${plan.acceptance.map(item => `- ${item}`).join('\n') || '- Complete and verify the user request.'}`,
+    'You are the primary DeepSeek executor in the current Harness Agent.',
+    'First synchronize this DAG through the native todo_write tool. Then execute the plan with only the tools and file changes it actually requires; do not edit files when the task explicitly requires no changes.',
+    'Use the native subagent and workflow tools when independent work benefits from parallel execution; their tool calls must be emitted normally so Harness renders native tool cards and child-Agent UI.',
+    concurrency,
+    'Do not print DSML, XML, function-call markup, or simulated tool logs as text. Call the provided tools directly.',
+  ].join('\n\n')
 }
 
-/** Identify short social turns that should not start a repository-changing run. */
+function plannerPrompt(task: string, repositoryContext?: string): string {
+  return [
+    'You are the GPT planning brain inside Captain.',
+    'Turn the task into a small dependency DAG. Return JSON only:',
+    '{"tasks":[{"id":string,"prompt":string,"dependsOn":string[],"files":string[],"tokenBudget":number}],"acceptance":string[]}',
+    'Use independent tasks for parallel work and never assign overlapping files to independent tasks.',
+    ...repositoryContext === undefined ? [] : [repositoryContext],
+    `User task:\n${task}`,
+  ].join('\n\n')
+}
+
+/** Identify short social turns that should not start a repository-changing run.
+ * @param task - Normalized user task text.
+ * @returns True when the task is a short conversational greeting or thanks.
+ */
 export function isConversationalTask(task: string): boolean {
-  return /^(?:\u65e9\u4e0a\u597d|\u4e2d\u5348\u597d|\u4e0b\u5348\u597d|\u665a\u4e0a\u597d|\u5348\u5b89|\u665a\u5b89|\u4f60\u597d|\u60a8\u597d|\u55e8|\u54c8\u55bd|hello|hi|hey|\u5728\u5417|\u5728\u7ebf\u5417|\u8c22\u8c22|\u591a\u8c22)[!！,.\uFF0C\u3002?？\s]*$/iu.test(task.trim())
+  const socialTurn = [
+    '早上好', '中午好', '下午好', '晚上好', '午安', '晚安', '你好', '您好', '嗨', '哈喽',
+    'hello', 'hi', 'hey', '在吗', '在线吗', '谢谢', '多谢',
+  ].join('|')
+  return new RegExp(`^(?:${socialTurn})[!！,.，。?？\\s]*$`, 'iu').test(task.trim())
 }
 
-/** Whether a short image turn asks only for visual facts rather than repository work. */
+/** Whether a short image turn asks only for visual facts rather than repository work.
+ * @param task - Normalized user task text.
+ * @returns True when the task requests image facts without implementation work.
+ */
 export function isImageAnalysisTask(task: string): boolean {
   const normalized = task.trim()
   if (normalized.length === 0 || normalized.length > 300) return false
@@ -381,7 +437,7 @@ function parsePlan(raw: string, fallback: string): CaptainPlan {
     try {
       const value: unknown = JSON.parse(candidate)
       if (isRecord(value) && Array.isArray(value.tasks)) {
-        const tasks = value.tasks.flatMap((item, index): CaptainTask[] => {
+        const tasks = value.tasks.flatMap((item, index) => {
           if (!isRecord(item) || typeof item.prompt !== 'string') return []
           return [{
             id: typeof item.id === 'string' ? item.id : `task-${index + 1}`,
@@ -391,24 +447,29 @@ function parsePlan(raw: string, fallback: string): CaptainPlan {
             tokenBudget: typeof item.tokenBudget === 'number' && item.tokenBudget > 0 ? item.tokenBudget : 8000,
           }]
         })
-        if (tasks.length > 0) return { tasks, acceptance: Array.isArray(value.acceptance) ? value.acceptance.filter((item): item is string => typeof item === 'string') : [] }
+        if (tasks.length > 0) return {
+          tasks,
+          acceptance: Array.isArray(value.acceptance) ? value.acceptance.filter((item): item is string => typeof item === 'string') : [],
+        }
       }
-    } catch { /* fallback below */ }
+    } catch {
+      // Fall through to one native executor task when the planner response is not valid JSON.
+    }
   }
   return { tasks: [{ id: 'task-1', prompt: fallback, dependsOn: [], files: [], tokenBudget: 8000 }], acceptance: [] }
 }
 
 /**
- * Return text from the latest direct user message, excluding history and injected context.
+ * Return text from the latest direct user message, excluding tool results and injected context.
  * @param messages - Complete model request history.
  * @returns Text blocks from the latest direct user message, or an empty string when absent.
  */
 export function currentTaskText(messages: readonly Message[]): string {
-  const message = latestUserMessage(messages)
+  const message = latestDirectUserMessage(messages)
   return message === undefined ? '' : textOf(message)
 }
 
-function latestUserMessage(messages: readonly Message[]): Message | undefined {
+function latestDirectUserMessage(messages: readonly Message[]): Message | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
     if (message !== undefined && message.role === 'user' && message.source.kind === 'user') return message
@@ -416,8 +477,126 @@ function latestUserMessage(messages: readonly Message[]): Message | undefined {
   return undefined
 }
 
+function imageInputsOf(messages: readonly Message[]): CaptainImageInput[] {
+  const images: CaptainImageInput[] = []
+  const visit = (blocks: readonly ContentBlock[]): void => {
+    for (const block of blocks) {
+      if (block.type === 'image') images.push({ ref: block.attachment })
+      else if (block.type === 'tool-result') visit(block.content)
+    }
+  }
+  for (const message of messages) visit(message.content)
+  return images
+}
+
+/**
+ * Remove image blocks before replaying parent history through a text-only worker route.
+ * @param messages - Parent history whose images have already been summarized by the Vision route.
+ * @returns Original messages without images, preserving unchanged message identities.
+ */
+function plannerMessages(messages: readonly Message[]): Message[] {
+  const withoutImages = messagesWithoutImages(messages)
+  if (messageChars(withoutImages) <= MAX_PLANNER_CONTEXT_CHARS) return withoutImages
+
+  let remaining = MAX_PLANNER_CONTEXT_CHARS
+  const compacted: Message[] = []
+  for (let index = withoutImages.length - 1; index >= 0 && remaining > 0; index -= 1) {
+    const source = withoutImages[index]
+    if (source === undefined) continue
+    const message = compactPlannerMessage(source, remaining)
+    if (message === undefined) continue
+    compacted.unshift(message)
+    remaining -= messageChars([message])
+  }
+  return compacted
+}
+
+function compactPlannerMessage(message: Message, budget: number): Message | undefined {
+  const content: ContentBlock[] = []
+  let remaining = budget
+  for (const block of message.content) {
+    if (remaining <= 0) break
+    if (block.type !== 'text') continue
+    const text = truncatePlannerText(block.text, remaining)
+    if (text.length === 0) continue
+    content.push({ type: 'text', text })
+    remaining -= text.length
+  }
+  return content.length === 0 ? undefined : freezeMessage({ ...message, content })
+}
+
+function truncatePlannerText(text: string, budget: number): string {
+  if (text.length <= budget) return text
+  if (budget <= 64) return text.slice(0, budget)
+  const head = Math.floor((budget - 40) * 0.65)
+  const tail = budget - 40 - head
+  return `${text.slice(0, head)}\n...[planner context truncated]...\n${text.slice(-tail)}`
+}
+
+function messageChars(messages: readonly Message[]): number {
+  return messages.reduce((total, message) => total + message.content.reduce((size, block) => {
+    if (block.type === 'text' || block.type === 'reasoning') return size + block.text.length
+    if (block.type === 'tool-call') return size + block.arguments.length + block.name.length
+    if (block.type === 'image') return size
+    return size + messageChars([{ ...message, content: block.content }])
+  }, 0), 0)
+}
+
+function fallbackPlan(task: string): CaptainPlan {
+  return {
+    tasks: [{ id: 'task-1', prompt: task || 'Continue the current tool-driven implementation.', dependsOn: [], files: [], tokenBudget: 8000 }],
+    acceptance: [],
+  }
+}
+
+function isRecoverablePlannerFailure(error: unknown): boolean {
+  if (!isRecord(error)) return false
+  const code = typeof error.code === 'string'
+    ? error.code
+    : isRecord(error.failure) && typeof error.failure.code === 'string' ? error.failure.code : undefined
+  return code !== undefined && new Set(['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT', 'STREAM_CLOSED']).has(code)
+}
+
+function messagesWithoutImages(messages: readonly Message[]): Message[] {
+  return messages.map((message) => {
+    const content = blocksWithoutImages(message.content)
+    return content === message.content ? message : freezeMessage({ ...message, content })
+  })
+}
+
+function blocksWithoutImages(blocks: readonly ContentBlock[]): ContentBlock[] {
+  let changed = false
+  const content: ContentBlock[] = []
+  for (const block of blocks) {
+    if (block.type === 'image') {
+      changed = true
+      continue
+    }
+    if (block.type === 'tool-result') {
+      const nested = blocksWithoutImages(block.content)
+      if (nested !== block.content) {
+        changed = true
+        content.push({ ...block, content: nested })
+        continue
+      }
+    }
+    content.push(block)
+  }
+  return changed ? content : blocks as ContentBlock[]
+}
+
 function textOf(message: Message): string {
   return message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
+}
+
+function policyForRequest(config: CaptainConfig, effort: GenerateOptions['reasoningEffort']): CaptainConfig {
+  const selected = effort === undefined ? undefined : String(effort)
+  if (selected !== 'balanced' && selected !== 'high-quality' && selected !== 'ultra') return config
+  return { ...config, policy: selected }
+}
+
+function isGptControlRoute(route: CaptainRoleRoute): boolean {
+  return route.provider === 'gpt-relay' && /^gpt-/iu.test(route.model)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -15,6 +15,15 @@ const groups: ModelProviderGroup[] = [
     ],
   },
   { id: 'deepseek-official', name: 'DeepSeek', models: [{ id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' }] },
+  {
+    id: 'captain',
+    name: 'Captain',
+    models: [{
+      id: 'captain:test',
+      name: 'Captain',
+      description: 'GPT planner + native DeepSeek executor',
+    }],
+  },
 ]
 
 function apiOf(catalog: readonly ModelProviderGroup[] = groups): Pick<IApiClient, 'llm'> {
@@ -94,7 +103,6 @@ describe('Captain settings controller', () => {
     await controller.loadModels()
     const face = controller.inject()
     expect(face.hooks.captainCard.getSnapshot().catalogGroups).toEqual(groups)
-
     face.edit('planner.reasoningEffort', 'high')
     face.edit('planner.provider', 'deepseek-official')
     const planner = face.hooks.captainCard.getSnapshot().draft.planner
@@ -104,4 +112,5 @@ describe('Captain settings controller', () => {
       reasoningEffort: 'high',
     })
   })
+
 })

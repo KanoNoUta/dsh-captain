@@ -13,7 +13,10 @@ export interface IncrementalDiff {
   hash: string
 }
 
-/** Compute a stable FNV-1a hash without a crypto dependency in the browser-safe projection. */
+/** Compute a stable FNV-1a hash without a crypto dependency in the browser-safe projection.
+ * @param value - Text to hash.
+ * @returns Eight-digit hexadecimal hash.
+ */
 export function diffHash(value: string): string {
   let hash = 2166136261
   for (let index = 0; index < value.length; index += 1) {
@@ -23,7 +26,11 @@ export function diffHash(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, '0')
 }
 
-/** Read changes after the checkpoint's recorded HEAD, including staged and working-tree edits. */
+/** Read changes after the checkpoint's recorded HEAD, including staged and working-tree edits.
+ * @param git - Git command runner.
+ * @param checkpoint - Previous reviewer checkpoint, if any.
+ * @returns Current HEAD, patch, changed files, and patch hash.
+ */
 export async function incrementalDiff(git: GitReader, checkpoint?: CaptainCheckpoint): Promise<IncrementalDiff> {
   const head = (await git.run(['rev-parse', 'HEAD'])).trim()
   const range = checkpoint === undefined
@@ -39,7 +46,11 @@ export async function incrementalDiff(git: GitReader, checkpoint?: CaptainCheckp
   return { head, patch, changedFiles, hash: diffHash(patch) }
 }
 
-/** Advance the checkpoint only after a reviewer pass. */
+/** Advance the checkpoint only after a reviewer pass.
+ * @param diff - Reviewed incremental diff.
+ * @param now - Timestamp to record in the checkpoint.
+ * @returns New checkpoint covering the reviewed diff.
+ */
 export function advanceCheckpoint(diff: IncrementalDiff, now = Date.now()): CaptainCheckpoint {
   return { head: diff.head, diffHash: diff.hash, changedFiles: [...diff.changedFiles], createdAt: now }
 }

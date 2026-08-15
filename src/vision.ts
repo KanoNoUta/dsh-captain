@@ -8,7 +8,11 @@ export interface CaptainImageInput {
   ref: ImageAttachmentRef
 }
 
-/** Append images to a user message without changing the text protocol. */
+/** Append images to a user message without changing the text protocol.
+ * @param message - User message receiving the attachments.
+ * @param images - Attachment references to append.
+ * @returns Message containing the original text and image blocks.
+ */
 export function withImages(message: Message, images: readonly CaptainImageInput[]): Message {
   if (message.role !== 'user') throw new Error('Captain vision input must be attached to a user message')
   const content: ContentBlock[] = [...message.content]
@@ -18,7 +22,12 @@ export function withImages(message: Message, images: readonly CaptainImageInput[
   return { ...message, content }
 }
 
-/** Build a nested OpenAI-compatible vision request using the configured Luna/Terra route. */
+/** Build a nested OpenAI-compatible vision request using the configured Luna/Terra route.
+ * @param route - Provider and model route for image analysis.
+ * @param messages - Conversation messages before image injection.
+ * @param images - Attachment references for the latest user message.
+ * @returns Generate request routed to the selected vision model.
+ */
 export function visionRequest(route: CaptainRoleRoute, messages: Message[], images: readonly CaptainImageInput[]): GenerateOptions {
   const last = messages.at(-1)
   const next = last === undefined ? messages : messages.slice(0, -1).concat(withImages(last, images))

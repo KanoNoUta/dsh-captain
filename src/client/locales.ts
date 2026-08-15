@@ -1,15 +1,16 @@
 /** Captain browser dictionaries. */
 export const NS = 'captain'
 
+/** English Captain settings strings. */
 export const en = {
   title: 'Captain',
-  description: 'GPT plans and reviews while DeepSeek implements the change.',
+  description: 'GPT plans, DeepSeek implements, and optional GPT review verifies the change.',
   policy: 'Thinking policy',
   planner: 'GPT planner',
   worker: 'DeepSeek worker',
   reviewer: 'GPT reviewer',
-  reviewerEnabled: 'Use GPT reviewer',
-  reviewerFallback: 'GPT review is off; the current DeepSeek worker model reviews the diff.',
+  reviewerEnabled: 'Enable review',
+  reviewerFallback: 'Review is disabled; Captain skips diff review and repair.',
   vision: 'Vision companion',
   provider: 'Provider route',
   model: 'Model id',
@@ -42,15 +43,16 @@ export const en = {
   relayHint: 'Use OpenAI-compatible relay routes. OAuth is not used.',
 } as const
 
+/** Simplified Chinese Captain settings strings. */
 export const zh = {
   title: '船长',
-  description: 'GPT 负责规划和审核，DeepSeek 负责落地修改。',
+  description: 'GPT 负责规划，DeepSeek 负责落地修改，并可选用 GPT 独立审核。',
   policy: '思考策略',
   planner: 'GPT 规划器',
   worker: 'DeepSeek 执行器',
   reviewer: 'GPT 审核器',
-  reviewerEnabled: '启用 GPT 审核',
-  reviewerFallback: '已关闭 GPT 审核，将使用当前 DeepSeek 执行器模型审核 Diff。',
+  reviewerEnabled: '启用审核',
+  reviewerFallback: '审核已关闭；Captain 将跳过 Diff 审核和返工。',
   vision: '视觉伴侣',
   provider: '中转提供方',
   model: '模型 ID',
@@ -83,6 +85,7 @@ export const zh = {
   relayHint: '使用 OpenAI-compatible 中转路由，不接官方 OAuth。',
 } as const
 
+/** Keys shared by the English and Chinese Captain dictionaries. */
 export type CaptainLocaleKey = keyof typeof en
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {

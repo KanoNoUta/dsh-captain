@@ -2,9 +2,9 @@
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only imports make the Host Context merges visible to aggregate builds.
 import type {} from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-fs'
 import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-settings'
-import type {} from '@deepseek-ai/dsh-workflow'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { LlmConfigurableProvider } from '@deepseek-ai/dsh-llm'
 import { CaptainAdapter, CAPTAIN_PROVIDER } from './adapter.ts'
@@ -21,9 +21,7 @@ export { parseReview, repairTasks, reviewNeedsRetry, reviewPrompt } from './revi
 export { withImages, visionRequest } from './vision.ts'
 
 export const name = 'captain'
-// The workflow engine is optional because the Web profile can disable its
-// provider; workers fall back to direct LLM calls when it is absent.
-export const inject = ['llm', 'settings', 'agents']
+export const inject = ['llm', 'settings', 'agents', 'fs']
 const NS = settingsNamespace(CAPTAIN_SETTINGS_NAMESPACE)
 
 /** Mount Captain's synthetic provider and hot-reloadable settings section. */

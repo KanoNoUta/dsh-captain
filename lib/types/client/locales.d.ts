@@ -1,14 +1,15 @@
 /** Captain browser dictionaries. */
 export declare const NS = "captain";
+/** English Captain settings strings. */
 export declare const en: {
     readonly title: "Captain";
-    readonly description: "GPT plans and reviews while DeepSeek implements the change.";
+    readonly description: "GPT plans, DeepSeek implements, and optional GPT review verifies the change.";
     readonly policy: "Thinking policy";
     readonly planner: "GPT planner";
     readonly worker: "DeepSeek worker";
     readonly reviewer: "GPT reviewer";
-    readonly reviewerEnabled: "Use GPT reviewer";
-    readonly reviewerFallback: "GPT review is off; the current DeepSeek worker model reviews the diff.";
+    readonly reviewerEnabled: "Enable review";
+    readonly reviewerFallback: "Review is disabled; Captain skips diff review and repair.";
     readonly vision: "Vision companion";
     readonly provider: "Provider route";
     readonly model: "Model id";
@@ -40,15 +41,16 @@ export declare const en: {
     readonly unavailable: "Captain settings are unavailable in this deployment.";
     readonly relayHint: "Use OpenAI-compatible relay routes. OAuth is not used.";
 };
+/** Simplified Chinese Captain settings strings. */
 export declare const zh: {
     readonly title: "船长";
-    readonly description: "GPT 负责规划和审核，DeepSeek 负责落地修改。";
+    readonly description: "GPT 负责规划，DeepSeek 负责落地修改，并可选用 GPT 独立审核。";
     readonly policy: "思考策略";
     readonly planner: "GPT 规划器";
     readonly worker: "DeepSeek 执行器";
     readonly reviewer: "GPT 审核器";
-    readonly reviewerEnabled: "启用 GPT 审核";
-    readonly reviewerFallback: "已关闭 GPT 审核，将使用当前 DeepSeek 执行器模型审核 Diff。";
+    readonly reviewerEnabled: "启用审核";
+    readonly reviewerFallback: "审核已关闭；Captain 将跳过 Diff 审核和返工。";
     readonly vision: "视觉伴侣";
     readonly provider: "中转提供方";
     readonly model: "模型 ID";
@@ -80,6 +82,7 @@ export declare const zh: {
     readonly unavailable: "当前部署没有开放船长设置。";
     readonly relayHint: "使用 OpenAI-compatible 中转路由，不接官方 OAuth。";
 };
+/** Keys shared by the English and Chinese Captain dictionaries. */
 export type CaptainLocaleKey = keyof typeof en;
 declare module '@deepseek-ai/dsh-client-ui-slots' {
     interface LocaleNamespaceMap {

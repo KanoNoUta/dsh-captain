@@ -16,12 +16,17 @@ export interface SchedulerState {
   parallelLimit: number
 }
 
-/** Build a validated scheduler state. */
+/** Build a validated scheduler state.
+ * @param config - Scheduler limits and adaptive policy.
+ * @returns Empty runtime state initialized from the configuration.
+ */
 export function createSchedulerState(config: CaptainOrchestrationConfig): SchedulerState {
   return { completed: new Set(), running: new Set(), failed: new Set(), tokensUsed: 0, parallelLimit: limitOf(config) }
 }
 
-/** Validate DAG ids, dependencies, and ownership metadata before execution. */
+/** Validate DAG ids, dependencies, and ownership metadata before execution.
+ * @param tasks - Planner-produced task list.
+ */
 export function validateTasks(tasks: readonly CaptainTask[]): void {
   const ids = new Set<string>()
   for (const task of tasks) {
@@ -52,7 +57,11 @@ export function validateTasks(tasks: readonly CaptainTask[]): void {
   for (const task of tasks) visit(task.id)
 }
 
-/** Select ready tasks while avoiding concurrent writes to overlapping files. */
+/** Select ready tasks while avoiding concurrent writes to overlapping files.
+ * @param tasks - Planner-produced task list.
+ * @param state - Current scheduler state.
+ * @returns Tasks eligible to start in this scheduling pass.
+ */
 export function readyTasks(tasks: readonly CaptainTask[], state: SchedulerState): CaptainTask[] {
   const occupied = new Set(tasks.filter(task => state.running.has(task.id)).flatMap(task => task.files))
   return tasks.filter(task => !state.completed.has(task.id) && !state.failed.has(task.id) && !state.running.has(task.id))
@@ -61,7 +70,11 @@ export function readyTasks(tasks: readonly CaptainTask[], state: SchedulerState)
     .slice(0, state.parallelLimit)
 }
 
-/** Mark tasks whose prerequisites failed so a failed branch cannot stall the DAG. */
+/** Mark tasks whose prerequisites failed so a failed branch cannot stall the DAG.
+ * @param tasks - Planner-produced task list.
+ * @param state - Current scheduler state.
+ * @returns Tasks newly marked as blocked.
+ */
 export function settleBlockedTasks(tasks: readonly CaptainTask[], state: SchedulerState): CaptainTask[] {
   const blocked: CaptainTask[] = []
   let changed = true
@@ -78,7 +91,11 @@ export function settleBlockedTasks(tasks: readonly CaptainTask[], state: Schedul
   return blocked
 }
 
-/** Reserve a task and account its budget before starting a child. */
+/** Reserve a task and account its budget before starting a child.
+ * @param state - Current scheduler state.
+ * @param task - Task to reserve.
+ * @param config - Scheduler limits and token budget.
+ */
 export function startTask(state: SchedulerState, task: CaptainTask, config: CaptainOrchestrationConfig): void {
   if (state.running.has(task.id)) throw new Error(`Captain task ${task.id} is already running`)
   if (state.tokensUsed + task.tokenBudget > config.totalTokenBudget) {
@@ -88,7 +105,12 @@ export function startTask(state: SchedulerState, task: CaptainTask, config: Capt
   state.tokensUsed += task.tokenBudget
 }
 
-/** Settle a task and feed provider pressure back into the parallel limit. */
+/** Settle a task and feed provider pressure back into the parallel limit.
+ * @param state - Current scheduler state.
+ * @param task - Task whose child run finished.
+ * @param observation - Provider outcome used by adaptive scheduling.
+ * @param config - Scheduler limits and adaptive policy.
+ */
 export function finishTask(
   state: SchedulerState,
   task: CaptainTask,
@@ -103,7 +125,11 @@ export function finishTask(
   else if (observation.succeeded === true) state.parallelLimit = Math.min(limitOf(config), state.parallelLimit + 1)
 }
 
-/** Whether the DAG has no remaining executable work. */
+/** Whether the DAG has no remaining executable work.
+ * @param tasks - Planner-produced task list.
+ * @param state - Current scheduler state.
+ * @returns True when every task is settled and no child is running.
+ */
 export function isSettled(tasks: readonly CaptainTask[], state: SchedulerState): boolean {
   return tasks.every(task => state.completed.has(task.id) || state.failed.has(task.id)) && state.running.size === 0
 }

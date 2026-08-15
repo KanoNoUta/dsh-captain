@@ -52,7 +52,9 @@ export class CaptainCardController {
     })
   }
 
-  /** Build the slot face. */
+  /** Build the slot face.
+   * @returns Browser-facing hooks and settings actions.
+   */
   inject(): CaptainCardFace {
     return {
       hooks: { captainCard: this.store },

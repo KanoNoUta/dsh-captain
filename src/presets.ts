@@ -1,6 +1,9 @@
 import type { CaptainConfig, CaptainPolicy, CaptainRoleRoute } from './types.ts'
 
-/** Resolve a display policy to the three role effort values. */
+/** Resolve a display policy to the three role effort values.
+ * @param policy - Named Captain thinking policy.
+ * @returns Effort value for planner, worker, and reviewer roles.
+ */
 export function effortPreset(policy: CaptainPolicy): Record<'planner' | 'worker' | 'reviewer', string> {
   switch (policy) {
     case 'balanced': return { planner: 'high', worker: 'high', reviewer: 'high' }
@@ -9,7 +12,11 @@ export function effortPreset(policy: CaptainPolicy): Record<'planner' | 'worker'
   }
 }
 
-/** Select the strongest supported provider effort for a Captain policy value. */
+/** Select the strongest supported provider effort for a Captain policy value.
+ * @param requested - Desired effort from the Captain policy.
+ * @param supported - Efforts advertised by the selected model.
+ * @returns Best compatible effort, or undefined when none is available.
+ */
 export function compatibleReasoningEffort(requested: string, supported: readonly string[]): string | undefined {
   if (supported.length === 0) return undefined
   const candidates = requested === 'ultra'
@@ -22,7 +29,10 @@ export function compatibleReasoningEffort(requested: string, supported: readonly
   return candidates.find(candidate => supported.includes(candidate))
 }
 
-/** Apply a policy only where a role did not explicitly choose its effort. */
+/** Apply a policy only where a role did not explicitly choose its effort.
+ * @param config - Captain route and policy settings.
+ * @returns Resolved planner, worker, and reviewer routes.
+ */
 export function resolvedRoleRoutes(config: CaptainConfig): Record<'planner' | 'worker' | 'reviewer', CaptainRoleRoute> {
   const preset = effortPreset(config.policy)
   const fallback = config.default
