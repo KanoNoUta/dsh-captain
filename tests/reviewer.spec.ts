@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseReview, repairTasks, reviewPrompt } from '../src/reviewer.ts'
+import { parseReview, repairTasks, reviewNeedsRetry, reviewPrompt } from '../src/reviewer.ts'
 import type { CaptainTask, CaptainWorkerResult } from '../src/types.ts'
 
 const tasks: CaptainTask[] = [
@@ -32,5 +32,21 @@ describe('Captain reviewer protocol', () => {
     ]
     const review = parseReview('{"pass":false,"summary":"finish","findings":[{"taskId":"finish","message":"bug","files":[],"severity":"error"}]}')
     expect(repairTasks(chain, review).map(task => task.id)).toEqual(['prepare', 'finish'])
+  })
+
+  it('extracts the first valid reviewer object without greedily joining prose objects', () => {
+    const review = parseReview('metadata {"attempt":1}\n```json\n{"pass":true,"summary":"ok","findings":[]}\n```\ntrailer {"ignored":true}')
+    expect(review).toEqual({ pass: true, summary: 'ok', findings: [] })
+  })
+
+  it('marks only reviewer protocol failures as retryable', () => {
+    expect(reviewNeedsRetry(parseReview('not json'))).toBe(true)
+    expect(reviewNeedsRetry(parseReview('{broken}'))).toBe(true)
+    expect(reviewNeedsRetry(parseReview('{"pass":false,"summary":"bug","findings":[{"message":"fix it"}]}'))).toBe(false)
+  })
+
+  it('does not pass a review that contains an error finding', () => {
+    const review = parseReview('{"pass":true,"summary":"contradictory","findings":[{"message":"still broken","severity":"error"}]}')
+    expect(review.pass).toBe(false)
   })
 })

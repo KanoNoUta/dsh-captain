@@ -7,7 +7,7 @@ export type * from './types.ts';
 export { effortPreset, resolvedRoleRoutes } from './presets.ts';
 export { createSchedulerState, finishTask, isSettled, readyTasks, settleBlockedTasks, startTask, validateTasks } from './scheduler.ts';
 export { advanceCheckpoint, diffHash, incrementalDiff } from './diff.ts';
-export { parseReview, repairTasks, reviewPrompt } from './reviewer.ts';
+export { parseReview, repairTasks, reviewNeedsRetry, reviewPrompt } from './reviewer.ts';
 export { withImages, visionRequest } from './vision.ts';
 export declare const name = "captain";
 export declare const inject: string[];

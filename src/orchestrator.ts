@@ -2,10 +2,11 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import { createUserMessage, type ContentBlock, type GenerateOptions, type LlmModelInfo, type LlmResolvedModelInfo, type Message, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { CaptainCheckpoint, CaptainConfig, CaptainPlan, CaptainRoleRoute, CaptainTask, CaptainTextResult, CaptainWorkerResult } from './types.ts'
 import { compatibleReasoningEffort, resolvedRoleRoutes } from './presets.ts'
-import { advanceCheckpoint, incrementalDiff, type GitReader } from './diff.ts'
-import { parseReview, repairTasks, reviewPrompt } from './reviewer.ts'
+import { advanceCheckpoint, incrementalDiff, type GitReader, type IncrementalDiff } from './diff.ts'
+import { parseReview, repairTasks, reviewNeedsRetry, reviewPrompt } from './reviewer.ts'
 import { createSchedulerState, finishTask, isSettled, readyTasks, settleBlockedTasks, startTask, validateTasks } from './scheduler.ts'
 import { resolveVisionRoute, visionRequest, type CaptainImageInput } from './vision.ts'
 
@@ -19,6 +20,7 @@ export interface CaptainCall {
 /** Host orchestrator for one synthetic Captain request. */
 export class CaptainOrchestrator {
   private checkpoint: CaptainCheckpoint | undefined
+  private checkpointCwd: string | undefined
 
   constructor(
     private readonly ctx: Context,
@@ -43,25 +45,34 @@ export class CaptainOrchestrator {
     }
     const plan = parsePlan((await this.call(routes.planner, plannerPrompt(taskText), options)).text, taskText)
     validateTasks(plan.tasks)
+    const workspaceCwd = workspaceCwdFor(this.ctx, options.sessionId)
     const budget = { used: 0 }
-    const workers = await this.executeTasks(plan.tasks, plan.acceptance, routes.worker, options, config, budget)
+    const workers = await this.executeTasks(plan.tasks, plan.acceptance, routes.worker, options, config, budget, workspaceCwd)
     const reviewRoute = config.reviewerEnabled ? routes.reviewer : routes.worker
-    const review = await this.review(plan, workers, reviewRoute, options, config)
+    const review = await this.review(plan, workers, reviewRoute, options, config, workspaceCwd)
     let currentReview = review
     let currentWorkers = workers
-    for (let round = 0; !currentReview.pass && round < config.orchestration.maxRepairRounds; round += 1) {
+    for (let round = 0; !currentReview.pass && currentWorkers.every(worker => worker.ok) && round < config.orchestration.maxRepairRounds; round += 1) {
       const repairs = repairTasks(plan.tasks, currentReview)
       if (repairs.length === 0) break
-      const repaired = await this.executeTasks(repairs, plan.acceptance, routes.worker, options, config, budget, currentReview.summary)
+      const repaired = await this.executeTasks(repairs, plan.acceptance, routes.worker, options, config, budget, workspaceCwd, currentReview.summary)
       const byId = new Map(currentWorkers.map(worker => [worker.taskId, worker]))
       for (const worker of repaired) byId.set(worker.taskId, worker)
       currentWorkers = [...byId.values()]
-      currentReview = await this.review(plan, currentWorkers, reviewRoute, options, config)
+      currentReview = await this.review(plan, currentWorkers, reviewRoute, options, config, workspaceCwd)
     }
-    const diff = await this.readDiff()
-    if (currentReview.pass) this.checkpoint = advanceCheckpoint(diff)
+    const diff = await this.readDiff(workspaceCwd)
+    if (currentReview.pass && diff.available) {
+      this.checkpoint = advanceCheckpoint(diff)
+      this.checkpointCwd = workspaceCwd
+    }
     const status = currentReview.pass ? 'Captain review passed.' : 'Captain review stopped with findings.'
-    return [status, currentReview.summary, ...currentWorkers.map(worker => `- ${worker.taskId}: ${worker.ok ? 'done' : 'failed'}${worker.error ? ` (${worker.error})` : ''}${worker.output ? `\n${worker.output}` : ''}`), diff.patch ? `Incremental diff: ${diff.changedFiles.join(', ') || 'workspace changes'}` : 'Incremental diff: none'].join('\n')
+    const diffSummary = !diff.available
+      ? 'Incremental diff: unavailable'
+      : diff.patch
+        ? `Incremental diff: ${diff.changedFiles.join(', ') || 'workspace changes'}`
+        : 'Incremental diff: none'
+    return [status, currentReview.summary, ...currentWorkers.map(worker => `- ${worker.taskId}: ${worker.ok ? 'done' : 'failed'}${worker.error ? ` (${worker.error})` : ''}${worker.output ? `\n${worker.output}` : ''}`), diffSummary].join('\n')
   }
 
   private async executeTasks(
@@ -71,6 +82,7 @@ export class CaptainOrchestrator {
     options: GenerateOptions,
     config: CaptainConfig,
     budget: { used: number },
+    workspaceCwd: string | undefined,
     repairContext = '',
   ): Promise<CaptainWorkerResult[]> {
     const orchestration = config.orchestration
@@ -100,7 +112,7 @@ export class CaptainOrchestrator {
         try {
           const output = await this.worker(task, acceptance, route, options, repairContext)
           finishTask(state, task, { succeeded: true }, orchestration)
-          return { taskId: task.id, ok: true, output, changedFiles: await this.changedFiles(), tokens: task.tokenBudget }
+          return { taskId: task.id, ok: true, output, changedFiles: await this.changedFiles(workspaceCwd), tokens: task.tokenBudget }
         } catch (error) {
           finishTask(state, task, failureObservation(error), orchestration)
           return { taskId: task.id, ok: false, output: '', changedFiles: [], tokens: task.tokenBudget, error: String(error) }
@@ -126,6 +138,23 @@ export class CaptainOrchestrator {
       repairContext ? `Reviewer feedback to fix:\n${repairContext}` : '',
       'Inspect the workspace, make the required incremental changes, run focused checks, and report changed files plus tests.',
     ].filter(Boolean).join('\n')
+    const first = await this.workerCall(task, route, options, prompt)
+    if (!isToolCallOnlyOutput(first)) return first
+    const retryPrompt = [
+      prompt,
+      'Your previous response contained unexecuted DSML tool calls. Execute the task with the available tools now. Return a final work report with changed files and checks; do not emit DSML, XML, function calls, or tool-call markup as text.',
+    ].join('\n\n')
+    const retried = await this.workerCall(task, route, options, retryPrompt)
+    if (isToolCallOnlyOutput(retried)) throw new Error(`worker ${task.id} returned unexecuted DSML tool calls`)
+    return retried
+  }
+
+  private async workerCall(
+    task: CaptainTask,
+    route: CaptainRoleRoute,
+    options: GenerateOptions,
+    prompt: string,
+  ): Promise<string> {
     const parent = options.sessionId === undefined ? undefined : this.ctx.agents.get(options.sessionId)
     const workflow = this.ctx.get('workflowEngine')
     if (parent !== undefined && workflow !== undefined) {
@@ -136,8 +165,12 @@ export class CaptainOrchestrator {
         parent,
         ...options.signal === undefined ? {} : { signal: options.signal },
       })
-      const result = await run.result
-      await run.dispose()
+      let result
+      try {
+        result = await run.result
+      } finally {
+        await run.dispose()
+      }
       if (result.stopReason !== 'completed') throw new Error(`worker ${task.id} stopped: ${result.stopReason}`)
       return typeof result.value === 'string' ? result.value : JSON.stringify(result.value)
     }
@@ -150,11 +183,26 @@ export class CaptainOrchestrator {
     route: CaptainRoleRoute,
     options: GenerateOptions,
     config: CaptainConfig,
+    workspaceCwd: string | undefined,
   ) {
-    const diff = await this.readDiff()
+    const failed = workers.filter(worker => !worker.ok)
+    if (failed.length > 0) {
+      return {
+        pass: false,
+        summary: 'Worker execution failed before review.',
+        findings: failed.map(worker => ({ id: `worker-${worker.taskId}`, taskId: worker.taskId, files: worker.changedFiles, severity: 'error' as const, message: worker.error ?? 'worker failed' })),
+      }
+    }
+    const diff = await this.readDiff(workspaceCwd)
     const prompt = reviewPrompt(plan.acceptance, workers, diff.patch)
     const result = await this.call(route, prompt, options, config.orchestration.reviewerTokenBudget)
-    return parseReview(result.text)
+    const parsed = parseReview(result.text)
+    if (!reviewNeedsRetry(parsed)) return parsed
+    const correction = [
+      prompt,
+      'Your previous response was not valid reviewer JSON. Return exactly one JSON object and no prose, Markdown, DSML, function calls, or tool calls.',
+    ].join('\n\n')
+    return parseReview((await this.call(route, correction, options, config.orchestration.reviewerTokenBudget)).text)
   }
 
   private async taskInput(options: GenerateOptions, route: CaptainRoleRoute): Promise<{ text: string; visionNotes?: string }> {
@@ -205,12 +253,13 @@ export class CaptainOrchestrator {
     return selected === undefined ? {} : { reasoningEffort: ReasoningEffortId(selected) }
   }
 
-  private async readDiff() {
+  private async readDiff(workspaceCwd: string | undefined): Promise<IncrementalDiff & { available: boolean }> {
+    if (workspaceCwd === undefined) return { head: 'unknown', patch: '', changedFiles: [], hash: '00000000', available: false }
     const git: GitReader = {
       run: async (args) => {
         const { execFile } = await import('node:child_process')
         return new Promise<string>((resolve, reject) => {
-          execFile('git', [...args], { cwd: process.cwd(), maxBuffer: 16 * 1024 * 1024 }, (error: Error | null, stdout: string) => {
+          execFile('git', [...args], { cwd: workspaceCwd, maxBuffer: 16 * 1024 * 1024 }, (error: Error | null, stdout: string) => {
             if (error) reject(error)
             else resolve(stdout)
           })
@@ -218,18 +267,40 @@ export class CaptainOrchestrator {
       },
     }
     try {
-      return await incrementalDiff(git, this.checkpoint)
+      const checkpoint = this.checkpointCwd === workspaceCwd ? this.checkpoint : undefined
+      return { ...await incrementalDiff(git, checkpoint), available: true }
     } catch {
-      return { head: 'unknown', patch: '', changedFiles: [], hash: '00000000' }
+      return { head: 'unknown', patch: '', changedFiles: [], hash: '00000000', available: false }
     }
   }
 
-  private async changedFiles(): Promise<string[]> {
-    const diff = await this.readDiff()
+  private async changedFiles(workspaceCwd: string | undefined): Promise<string[]> {
+    const diff = await this.readDiff(workspaceCwd)
     // The checkpoint is intentionally advanced only by a passing reviewer;
     // this projection is read-only and gives the reviewer current paths.
     return diff.changedFiles
   }
+}
+
+/**
+ * Resolve the repository working directory carried by the parent Agent session.
+ * @param ctx - Host context containing the live Agent registry.
+ * @param sessionId - Parent Agent identity from the model request.
+ * @returns The session workspace path, or undefined without a live parent workspace.
+ */
+export function workspaceCwdFor(ctx: Context, sessionId: SessionId | undefined): string | undefined {
+  return sessionId === undefined ? undefined : ctx.agents.get(sessionId)?.session.header.cwd
+}
+
+/**
+ * Whether a worker returned provider tool syntax as text instead of a final work report.
+ * @param raw - Worker result text.
+ * @returns True when the complete response is a DSML tool-call envelope.
+ */
+export function isToolCallOnlyOutput(raw: string): boolean {
+  const trimmed = raw.trim()
+  if (!/^<\s*[｜|]*DSML[｜|]*(?:tool_calls|tools_call|function_calls)\b/iu.test(trimmed)) return false
+  return /<\s*[｜|]*DSML[｜|]*(?:invoke|tool|function_calls?)\b/iu.test(trimmed)
 }
 
 function policyForRequest(config: CaptainConfig, effort: GenerateOptions['reasoningEffort']): CaptainConfig {

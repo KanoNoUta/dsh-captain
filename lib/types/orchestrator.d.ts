@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import { type GenerateOptions, type LlmModelInfo, type LlmResolvedModelInfo, type Message } from '@deepseek-ai/dsh-llm';
 import type { StreamChunk } from '@deepseek-ai/dsh-llm';
+import type { SessionId } from '@deepseek-ai/dsh-session';
 import type { CaptainConfig, CaptainTextResult } from './types.ts';
 /** LLM call facade kept small so the orchestrator is deterministic in tests. */
 export interface CaptainCall {
@@ -14,11 +15,13 @@ export declare class CaptainOrchestrator {
     private readonly config;
     private readonly llm;
     private checkpoint;
+    private checkpointCwd;
     constructor(ctx: Context, config: () => CaptainConfig, llm: CaptainCall);
     /** Plan, execute, review, and return a user-facing summary. */
     run(options: GenerateOptions): Promise<string>;
     private executeTasks;
     private worker;
+    private workerCall;
     private review;
     private taskInput;
     private call;
@@ -27,6 +30,10 @@ export declare class CaptainOrchestrator {
     private readDiff;
     private changedFiles;
 }
+/** Resolve the repository working directory carried by the parent Agent session. */
+export declare function workspaceCwdFor(ctx: Context, sessionId: SessionId | undefined): string | undefined;
+/** Whether a worker returned provider tool syntax as text instead of a final work report. */
+export declare function isToolCallOnlyOutput(raw: string): boolean;
 /** Collect visible text and usage from a canonical stream. */
 export declare function collectText(stream: AsyncIterable<StreamChunk>): Promise<CaptainTextResult>;
 /** Identify short social turns that should not start a repository-changing run. */

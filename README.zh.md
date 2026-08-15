@@ -33,7 +33,9 @@ Captain 会在分发前解析每个内部 provider/model 路由。策略强度�
 
 Captain 通过现有 OpenAI-compatible LLM adapter 调用配置的提供方路由，不实现 OAuth，也不新建一套凭据存储。先在普通 LLM 设置里配置中转提供方，再把提供方和模型 ID 填进 Captain 设置。
 
-Planner 返回 JSON 依赖 DAG。文件所有权不重叠的 Worker 会在 Token 预算和自适应并发上限内并行执行。Reviewer 接收验收条件、Worker 报告和当前增量 Git Diff。审核失败时只返工 finding 指定的任务；未绑定任务的 finding 会重新检查完整计划。审核通过后才推进下一轮使用的进程内 checkpoint。
+Planner 返回 JSON 依赖 DAG。文件所有权不重叠的 Worker 会在 Token 预算和自适应并发上限内并行执行。Worker 只返回未执行的 DSML 工具调用标记时会收到一次纠正请求；第二次仍返回这类文本就判定任务失败。Worker 执行失败会在审核和返工前停止。Reviewer 接收验收条件、Worker 报告和当前增量 Git Diff；响应格式错误时会收到一次严格 JSON 纠正请求。代码审核失败时只返工 finding 指定的任务；未绑定任务的 finding 会重新检查完整计划。审核通过后才推进下一轮使用的进程内 checkpoint。
+
+Git 审核始终使用父 Agent Session 的 `cwd`。请求缺少该工作区元数据时，增量 Diff 会显示为不可用，不会读取 Harness Host 进程目录里的改动。运行中的编排器按工作区路径隔离 checkpoint。
 
 简短的日常问候会直接走 GPT Planner 路由，不启动 Worker 或 Reviewer，因此闲聊不会触发仓库 Diff 审核。简短的图片识别或描述请求会直接返回视觉 notes；要求写代码、修复、部署、提交或发布的图片回合仍进入规划和执行流程。定向返工会连同前置依赖任务一起提交给调度器，确保返工 DAG 始终有可执行的根任务。
 
